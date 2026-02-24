@@ -1,0 +1,155 @@
+# =============================================================================
+# sharedLLM — System Requirements
+# =============================================================================
+# NOTE: This is NOT a Python pip file.
+# This project is built with Rust (backend) + Node.js (frontend).
+# Rust and Node dependencies are managed automatically by Cargo and npm.
+# This file documents the system-level tools you must install manually.
+# =============================================================================
+
+
+# =============================================================================
+# REQUIRED — must be installed before running the project
+# =============================================================================
+
+# 1. Rust toolchain (includes cargo, rustc, rustup)
+#    Version : stable (1.75+)
+#    Install : https://rustup.rs
+#    Command : curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+#
+rust >= 1.75
+
+# 2. Node.js (JavaScript runtime for building the frontend)
+#    Version : 18.0.0 or higher
+#    Install : https://nodejs.org  OR  https://github.com/nvm-sh/nvm
+#    Command : brew install node        (macOS)
+#              sudo apt install nodejs  (Ubuntu/Debian)
+#
+node >= 18.0.0
+
+# 3. npm (Node package manager — comes bundled with Node.js)
+#    Version : 9.0.0 or higher
+#    Install : included with Node.js
+#
+npm >= 9.0.0
+
+# 4. Ollama (local LLM inference engine)
+#    Version : any recent release
+#    Install : https://ollama.com/download
+#    Command : brew install ollama      (macOS)
+#              curl -fsSL https://ollama.com/install.sh | sh  (Linux)
+#    Notes   : The server can auto-start Ollama if it is installed.
+#              You can also run it manually: `ollama serve`
+#
+ollama >= 0.1.0
+
+
+# =============================================================================
+# OPTIONAL — only needed for specific GPU types
+# =============================================================================
+
+# 5. NVIDIA GPU support
+#    Required if : you have an NVIDIA GPU and want VRAM stats
+#    Tool        : nvidia-smi (comes with NVIDIA drivers)
+#    Install     : https://www.nvidia.com/Download/index.aspx
+#    Command     : nvidia-smi --query-gpu=memory.total,memory.used --format=csv
+#
+nvidia-smi  # optional — NVIDIA GPU only
+
+# 6. AMD GPU support
+#    Required if : you have an AMD GPU and want VRAM stats
+#    Tool        : rocm-smi (part of ROCm)
+#    Install     : https://rocm.docs.amd.com/en/latest/deploy/linux/index.html
+#    Command     : rocm-smi --showmeminfo vram
+#
+rocm-smi    # optional — AMD GPU only
+
+# 7. Git (for cloning the repository)
+#    Version : any
+#    Install : https://git-scm.com
+#    Command : brew install git         (macOS)
+#              sudo apt install git     (Ubuntu/Debian)
+#
+git >= 2.0.0
+
+
+# =============================================================================
+# AUTOMATICALLY INSTALLED — do NOT install these manually
+# =============================================================================
+# The following are managed by Cargo (Rust) and npm (Node.js).
+# They are downloaded automatically when you run start.sh or dev.sh.
+
+# --- Rust crates (backend/Cargo.toml) ---
+# axum              = "0.7"       # web framework + WebSocket
+# tower             = "0.4"       # middleware stack
+# tower-http        = "0.5"       # CORS, static file serving, tracing
+# hyper             = "1.0"       # HTTP server
+# tokio             = "1"         # async runtime
+# tokio-stream      = "0.1"       # async streams
+# futures           = "0.3"       # future combinators
+# futures-util      = "0.3"       # future utilities
+# sqlx              = "0.7"       # async SQLite ORM + migrations
+# serde             = "1"         # serialization framework
+# serde_json        = "1"         # JSON support
+# uuid              = "1"         # UUID generation
+# chrono            = "0.4"       # date/time
+# mdns-sd           = "0.11"      # mDNS device discovery
+# local-ip-address  = "0.6"       # get local network IP
+# sysinfo           = "0.30"      # cross-platform system/RAM info
+# reqwest           = "0.12"      # HTTP client (Ollama API calls)
+# tracing           = "0.1"       # structured logging
+# tracing-subscriber= "0.3"       # log output formatting
+# anyhow            = "1"         # error handling
+# thiserror         = "1"         # custom error types
+# which             = "6"         # find executables on PATH
+# hostname          = "0.4"       # get machine hostname
+
+# --- Node packages (frontend/package.json) ---
+# react                    = "^19.2.0"   # UI framework
+# react-dom                = "^19.2.0"   # DOM renderer
+# react-router-dom         = "^6.30.3"   # client-side routing
+# recharts                 = "^3.7.0"    # memory usage charts
+# lucide-react             = "^0.575.0"  # icons
+# clsx                     = "^2.1.1"    # conditional class names
+# tailwindcss              = "^3.4.19"   # utility CSS framework
+# vite                     = "^7.3.1"    # frontend build tool
+# typescript               = "~5.9.3"    # type system
+# @vitejs/plugin-react     = "^5.1.1"    # React + Vite integration
+# postcss                  = "^8.5.6"    # CSS post-processing
+# autoprefixer             = "^10.4.24"  # CSS vendor prefixes
+# eslint                   = "^9.39.1"   # linter
+
+
+# =============================================================================
+# HARDWARE REQUIREMENTS
+# =============================================================================
+#
+# Minimum:
+#   RAM     : 8 GB system RAM (to run at least one small LLM via Ollama)
+#   Storage : 5 GB free (Rust build artifacts + model weights)
+#   Network : WiFi or Ethernet (for mDNS device discovery)
+#
+# Recommended:
+#   RAM / VRAM : 16 GB+ (fits models like llama3:8b, qwen3:8b, mistral)
+#   Storage    : 20 GB+ (multiple LLM model weights)
+#   CPU        : Apple Silicon M1+ / AMD Ryzen 5+ / Intel Core i5+
+
+
+# =============================================================================
+# OPERATING SYSTEM SUPPORT
+# =============================================================================
+#
+# macOS   : 12 Monterey or newer (Apple Silicon + Intel both supported)
+# Linux   : Ubuntu 22.04+ / Debian 12+ / Fedora 38+ (x86_64 and ARM64)
+# Windows : Not officially supported (WSL2 may work but is untested)
+
+
+# =============================================================================
+# NETWORK REQUIREMENTS
+# =============================================================================
+#
+# Port 8080   : HTTP API + WebSocket + Dashboard (must be open/unblocked)
+# Port 11434  : Ollama API (localhost only, no firewall change needed)
+# mDNS/Bonjour: UDP port 5353 (for automatic device discovery on LAN)
+#               macOS: enabled by default
+#               Linux: install avahi-daemon  →  sudo apt install avahi-daemon
