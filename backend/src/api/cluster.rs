@@ -210,21 +210,64 @@ pub async fn stop_rpc_server(State(state): State<Arc<AppState>>) -> impl IntoRes
     }
 }
 
-// ─── POST /v1/chat/completions (proxy to llama-server) ───────────────────────
+// ─── POST /v1/chat/completions (proxy to active backend) ─────────────────────
 
 pub async fn chat_completions_proxy(
     State(state): State<Arc<AppState>>,
     body: axum::body::Bytes,
 ) -> Response {
-    if !state.llama_cpp.is_inference_running().await {
+    // Read active backend config from DB
+    let backend_type = queries::get_setting(&state.pool, "backend_type")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_else(|| "llamacpp".to_string());
+
+    // ── llama.cpp path (existing behaviour) ──────────────────────────────────
+    if backend_type == "llamacpp" {
+        if !state.llama_cpp.is_inference_running().await {
+            return Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "error": "Inference server is not running. Start it from the Inference page first."
+                    })
+                    .to_string(),
+                ))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::SERVICE_UNAVAILABLE)
+                        .body(Body::empty())
+                        .unwrap()
+                });
+        }
+
+        let url = format!(
+            "{}/v1/chat/completions",
+            state.llama_cpp.inference_base_url()
+        );
+
+        return proxy_request(&state.llama_cpp.client, &url, None, body).await;
+    }
+
+    // ── External backend path ─────────────────────────────────────────────────
+    let backend_url = queries::get_setting(&state.pool, "backend_url")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    let api_key = queries::get_setting(&state.pool, "backend_api_key")
+        .await
+        .unwrap_or(None)
+        .filter(|s| !s.is_empty());
+
+    if backend_url.is_empty() {
         return Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .header("Content-Type", "application/json")
             .body(Body::from(
-                serde_json::json!({
-                    "error": "Inference server is not running. Start it from the Inference page first."
-                })
-                .to_string(),
+                serde_json::json!({ "error": "No backend URL configured. Set a backend in the Inference page." })
+                    .to_string(),
             ))
             .unwrap_or_else(|_| {
                 Response::builder()
@@ -234,29 +277,40 @@ pub async fn chat_completions_proxy(
             });
     }
 
-    let url = format!(
-        "{}/v1/chat/completions",
-        state.llama_cpp.inference_base_url()
-    );
+    let chat_url = if backend_type == "ollama" {
+        // Ollama supports OpenAI-compat endpoint too; use /v1/chat/completions
+        format!("{}/v1/chat/completions", backend_url.trim_end_matches('/'))
+    } else {
+        format!("{}/v1/chat/completions", backend_url.trim_end_matches('/'))
+    };
 
-    match state
-        .llama_cpp
-        .client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .await
-    {
+    proxy_request(&state.llama_cpp.client, &chat_url, api_key.as_deref(), body).await
+}
+
+// ─── shared proxy helper ──────────────────────────────────────────────────────
+
+async fn proxy_request(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: Option<&str>,
+    body: axum::body::Bytes,
+) -> Response {
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/json");
+
+    if let Some(key) = api_key {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+
+    match req.body(body).send().await {
         Ok(resp) => {
             let status = resp.status();
             let ct = resp
                 .headers()
                 .get("content-type")
                 .cloned()
-                .unwrap_or_else(|| {
-                    "application/json".parse().unwrap()
-                });
+                .unwrap_or_else(|| "application/json".parse().unwrap());
             let stream = resp.bytes_stream();
             Response::builder()
                 .status(status)
@@ -274,8 +328,7 @@ pub async fn chat_completions_proxy(
             .status(StatusCode::BAD_GATEWAY)
             .header("Content-Type", "application/json")
             .body(Body::from(
-                serde_json::json!({ "error": format!("llama-server unreachable: {}", e) })
-                    .to_string(),
+                serde_json::json!({ "error": format!("Backend unreachable: {}", e) }).to_string(),
             ))
             .unwrap_or_else(|_| {
                 Response::builder()

@@ -126,4 +126,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, stream }),
     }),
+
+  // Inference backend config
+  backendConfig: () =>
+    fetch(`${API_BASE}/api/backends/config`).then(checkOk).then(r => r.json()),
+  setBackendConfig: (config: { backend_type: string; url: string; model: string; api_key?: string }) =>
+    fetch(`${API_BASE}/api/backends/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }).then(checkOk).then(r => r.json()),
+  fetchBackendModels: (backend_type: string, url: string, api_key?: string) => {
+    const params = new URLSearchParams({ type: backend_type, url })
+    if (api_key) params.set('api_key', api_key)
+    return fetch(`${API_BASE}/api/backends/models?${params}`).then(checkOk).then(r => r.json()) as Promise<string[]>
+  },
 }

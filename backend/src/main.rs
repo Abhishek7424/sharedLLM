@@ -210,6 +210,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Settings
         .route("/api/settings", get(api::settings::list_settings))
         .route("/api/settings/:key", put(api::settings::update_setting))
+        // Inference backend config
+        .route("/api/backends/config", get(api::backends::get_backend_config))
+        .route("/api/backends/config", post(api::backends::set_backend_config))
+        .route("/api/backends/models", get(api::backends::list_backend_models))
         // Cluster / Distributed inference
         .route("/api/cluster/status", get(api::cluster::cluster_status))
         .route("/api/cluster/inference/start", post(api::cluster::start_inference))

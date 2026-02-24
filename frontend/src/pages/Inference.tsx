@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download } from 'lucide-react'
+import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download, Check, ChevronDown } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
-import type { ClusterStatus, ChatMessage, InferenceSessionInfo } from '../types'
+import type { BackendConfig, BackendType, ClusterStatus, ChatMessage, InferenceSessionInfo } from '../types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,21 +22,268 @@ function StatusDot({ ok }: { ok: boolean }) {
   )
 }
 
+// ─── Backend tab labels ───────────────────────────────────────────────────────
+
+const BACKEND_TABS: { type: BackendType; label: string; defaultUrl: string }[] = [
+  { type: 'llamacpp', label: 'llama.cpp', defaultUrl: '' },
+  { type: 'ollama',   label: 'Ollama',    defaultUrl: 'http://localhost:11434' },
+  { type: 'lmstudio', label: 'LM Studio', defaultUrl: 'http://localhost:1234' },
+  { type: 'vllm',     label: 'vLLM',      defaultUrl: 'http://localhost:8000' },
+  { type: 'openai',   label: 'OpenAI',    defaultUrl: 'https://api.openai.com' },
+  { type: 'custom',   label: 'Custom',    defaultUrl: 'http://localhost:8080' },
+]
+
+// ─── BackendSelector ─────────────────────────────────────────────────────────
+
+interface BackendSelectorProps {
+  activeConfig: BackendConfig | null
+  onActivated: (cfg: BackendConfig) => void
+}
+
+function BackendSelector({ activeConfig, onActivated }: BackendSelectorProps) {
+  const [selectedType, setSelectedType] = useState<BackendType>(
+    (activeConfig?.backend_type as BackendType) ?? 'llamacpp'
+  )
+  const [url, setUrl] = useState(activeConfig?.url ?? '')
+  const [model, setModel] = useState(activeConfig?.model ?? '')
+  const [apiKey, setApiKey] = useState(activeConfig?.api_key ?? '')
+  const [modelList, setModelList] = useState<string[]>([])
+  const [modelLoading, setModelLoading] = useState(false)
+  const [modelError, setModelError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [showDropdown, setShowDropdown] = useState(false)
+
+  // When tab changes, reset URL to the default for that backend
+  function handleTabChange(type: BackendType) {
+    setSelectedType(type)
+    const tab = BACKEND_TABS.find(t => t.type === type)!
+    // Keep current URL if it's non-empty and not a different default
+    const isOtherDefault = BACKEND_TABS.some(t => t.type !== type && t.defaultUrl && t.defaultUrl === url)
+    if (!url || isOtherDefault) {
+      setUrl(tab.defaultUrl)
+    }
+    setModelList([])
+    setModelError(null)
+    setModel('')
+  }
+
+  async function fetchModels() {
+    if (selectedType === 'llamacpp') return
+    setModelLoading(true)
+    setModelError(null)
+    try {
+      const list = await api.fetchBackendModels(selectedType, url, apiKey || undefined)
+      setModelList(list)
+      if (list.length > 0 && !list.includes(model)) {
+        setModel(list[0])
+      }
+    } catch (e: unknown) {
+      setModelError(e instanceof Error ? e.message : String(e))
+      setModelList([])
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
+  async function handleActivate() {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const cfg: BackendConfig = {
+        backend_type: selectedType,
+        url: url.trim(),
+        model: model.trim(),
+        api_key: apiKey.trim() || undefined,
+      }
+      await api.setBackendConfig(cfg)
+      onActivated(cfg)
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const isActive =
+    activeConfig?.backend_type === selectedType &&
+    activeConfig?.url === url &&
+    activeConfig?.model === model
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-300">Inference Backend</h2>
+        {activeConfig && (
+          <span className="text-xs text-muted">
+            Active:{' '}
+            <span className="text-accent font-medium">
+              {BACKEND_TABS.find(t => t.type === activeConfig.backend_type)?.label ?? activeConfig.backend_type}
+              {activeConfig.model ? ` / ${activeConfig.model}` : ''}
+            </span>
+          </span>
+        )}
+      </div>
+
+      {/* Tab row */}
+      <div className="flex flex-wrap gap-1">
+        {BACKEND_TABS.map(tab => (
+          <button
+            key={tab.type}
+            onClick={() => handleTabChange(tab.type)}
+            className={clsx(
+              'px-3 py-1.5 text-xs rounded-lg font-medium transition-colors',
+              selectedType === tab.type
+                ? 'bg-accent text-white'
+                : 'bg-surface text-muted hover:text-gray-200 border border-border'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Per-backend config */}
+      {selectedType === 'llamacpp' ? (
+        <p className="text-xs text-muted">
+          llama.cpp runs locally via the controls below. Use Start Inference to activate it.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {/* URL */}
+          <div>
+            <label className="block text-xs text-muted mb-1">
+              {selectedType === 'openai' ? 'API Base URL' : 'Server URL'}
+            </label>
+            <input
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder={BACKEND_TABS.find(t => t.type === selectedType)?.defaultUrl}
+              className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted focus:outline-none focus:border-accent font-mono"
+            />
+          </div>
+
+          {/* API key (openai + custom) */}
+          {(selectedType === 'openai' || selectedType === 'custom') && (
+            <div>
+              <label className="block text-xs text-muted mb-1">API Key</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                placeholder="sk-..."
+                className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted focus:outline-none focus:border-accent font-mono"
+              />
+            </div>
+          )}
+
+          {/* Model selector */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs text-muted">Model</label>
+              <button
+                onClick={fetchModels}
+                disabled={modelLoading || !url.trim()}
+                className="text-xs text-accent hover:underline disabled:opacity-40 flex items-center gap-1"
+              >
+                {modelLoading
+                  ? <><Loader2 size={11} className="animate-spin" /> Loading...</>
+                  : <><RefreshCw size={11} /> Fetch models</>}
+              </button>
+            </div>
+
+            {modelList.length > 0 ? (
+              <div className="relative">
+                <button
+                  onClick={() => setShowDropdown(v => !v)}
+                  className="w-full flex items-center justify-between bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-accent"
+                >
+                  <span className="truncate">{model || 'Select a model...'}</span>
+                  <ChevronDown size={14} className="flex-shrink-0 text-muted" />
+                </button>
+                {showDropdown && (
+                  <div className="absolute z-10 mt-1 w-full bg-surface-2 border border-border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                    {modelList.map(m => (
+                      <button
+                        key={m}
+                        onClick={() => { setModel(m); setShowDropdown(false) }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-surface text-gray-200 flex items-center gap-2"
+                      >
+                        {m === model && <Check size={12} className="text-accent flex-shrink-0" />}
+                        <span className="truncate">{m}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <input
+                value={model}
+                onChange={e => setModel(e.target.value)}
+                placeholder="e.g. llama3.2, gpt-4o-mini"
+                className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted focus:outline-none focus:border-accent"
+              />
+            )}
+            {modelError && (
+              <p className="text-xs text-warning mt-1">{modelError} — enter model name manually.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {saveError && (
+        <p className="text-xs text-danger">{saveError}</p>
+      )}
+
+      {selectedType !== 'llamacpp' && (
+        <button
+          onClick={handleActivate}
+          disabled={saving || !url.trim()}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium transition-colors disabled:opacity-40',
+            isActive
+              ? 'bg-success/15 text-success border border-success/30'
+              : 'btn-primary'
+          )}
+        >
+          {saving
+            ? <Loader2 size={14} className="animate-spin" />
+            : isActive
+            ? <Check size={14} />
+            : null}
+          {isActive ? 'Active' : saving ? 'Saving...' : 'Activate'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ inferenceRunning }: { inferenceRunning: boolean }) {
+function ChatPanel({ inferenceRunning, activeConfig }: {
+  inferenceRunning: boolean
+  activeConfig: BackendConfig | null
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [tokens, setTokens] = useState<number | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
+  // Chat is available when llamacpp inference is running OR an external backend is configured
+  const externalBackendReady =
+    activeConfig !== null &&
+    activeConfig.backend_type !== 'llamacpp' &&
+    activeConfig.url.trim() !== ''
+
+  const chatReady = inferenceRunning || externalBackendReady
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
   async function send() {
-    if (!input.trim() || loading || !inferenceRunning) return
+    if (!input.trim() || loading || !chatReady) return
 
     const userMsg: ChatMessage = { role: 'user', content: input.trim() }
     setMessages(prev => [...prev, userMsg])
@@ -45,9 +292,10 @@ function ChatPanel({ inferenceRunning }: { inferenceRunning: boolean }) {
 
     const history: ChatMessage[] = [...messages, userMsg]
     const t0 = Date.now()
+    const modelName = activeConfig?.model || 'local'
 
     try {
-      const resp = await api.chatCompletions(history)
+      const resp = await api.chatCompletions(history, modelName)
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ error: 'Unknown error' }))
         setMessages(prev => [
@@ -78,6 +326,12 @@ function ChatPanel({ inferenceRunning }: { inferenceRunning: boolean }) {
     }
   }
 
+  const placeholder = chatReady
+    ? 'Type a message...'
+    : inferenceRunning === false && !externalBackendReady
+    ? 'Start llama.cpp inference or activate an external backend'
+    : 'Start inference to chat'
+
   return (
     <div className="card flex flex-col h-[500px]">
       <div className="flex items-center justify-between mb-3">
@@ -91,9 +345,9 @@ function ChatPanel({ inferenceRunning }: { inferenceRunning: boolean }) {
       <div className="flex-1 overflow-y-auto space-y-3 mb-3 pr-1">
         {messages.length === 0 && (
           <p className="text-xs text-muted text-center mt-8">
-            {inferenceRunning
+            {chatReady
               ? 'Start chatting with the model...'
-              : 'Start inference first to enable chat.'}
+              : placeholder}
           </p>
         )}
         {messages.map((m, i) => (
@@ -124,13 +378,13 @@ function ChatPanel({ inferenceRunning }: { inferenceRunning: boolean }) {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
-          placeholder={inferenceRunning ? 'Type a message...' : 'Start inference to chat'}
-          disabled={!inferenceRunning || loading}
+          placeholder={placeholder}
+          disabled={!chatReady || loading}
           className="flex-1 bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted disabled:opacity-50 focus:outline-none focus:border-accent"
         />
         <button
           onClick={send}
-          disabled={!inferenceRunning || loading || !input.trim()}
+          disabled={!chatReady || loading || !input.trim()}
           className="btn-primary p-2 disabled:opacity-40"
         >
           <Send size={16} />
@@ -149,12 +403,17 @@ export function InferencePage() {
   const [loading, setLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [activeBackend, setActiveBackend] = useState<BackendConfig | null>(null)
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      const data = await api.clusterStatus()
+      const [data, cfg] = await Promise.all([
+        api.clusterStatus(),
+        api.backendConfig().catch(() => null),
+      ])
       setClusterStatus(data)
+      if (cfg) setActiveBackend(cfg)
     } catch (e: unknown) {
       console.error('Failed to fetch cluster status', e)
     } finally {
@@ -182,6 +441,10 @@ export function InferencePage() {
     setActionError(null)
     try {
       await api.startInference(modelPath.trim(), selectedDeviceIds)
+      // Auto-activate llamacpp backend when inference starts
+      const cfg: BackendConfig = { backend_type: 'llamacpp', url: '', model: modelPath.trim() }
+      await api.setBackendConfig(cfg)
+      setActiveBackend(cfg)
       await refresh()
     } catch (e: unknown) {
       setActionError(e instanceof Error ? e.message : String(e))
@@ -283,7 +546,7 @@ export function InferencePage() {
         <div>
           <h1 className="text-xl font-bold text-gray-100">Distributed Inference</h1>
           <p className="text-sm text-muted mt-0.5">
-            Run LLM inference across multiple devices using llama.cpp RPC
+            Run LLM inference locally with llama.cpp or connect to an external backend
           </p>
         </div>
         <button
@@ -296,7 +559,13 @@ export function InferencePage() {
         </button>
       </div>
 
-      {/* Binary status */}
+      {/* Backend selector — always visible at top */}
+      <BackendSelector
+        activeConfig={activeBackend}
+        onActivated={cfg => setActiveBackend(cfg)}
+      />
+
+      {/* llama.cpp section — shown when llamacpp tab or no external backend active */}
       <div className="card">
         <h2 className="text-sm font-semibold text-gray-300 mb-3">llama.cpp Binaries</h2>
         <div className="grid grid-cols-2 gap-3">
@@ -331,7 +600,7 @@ export function InferencePage() {
                 {installing ? 'Installing...' : 'Install Automatically'}
               </button>
               <a
-                href="https://github.com/ggerganov/llama.cpp/releases"
+                href="https://github.com/ggml-org/llama.cpp/releases"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-accent hover:underline"
@@ -385,7 +654,7 @@ export function InferencePage() {
 
           {/* Model path */}
           <div className="card">
-            <h2 className="text-sm font-semibold text-gray-300 mb-3">Model</h2>
+            <h2 className="text-sm font-semibold text-gray-300 mb-3">Model (llama.cpp)</h2>
             <input
               value={modelPath}
               onChange={e => setModelPath(e.target.value)}
@@ -521,7 +790,7 @@ export function InferencePage() {
 
         {/* Right: chat */}
         <div>
-          <ChatPanel inferenceRunning={inferenceRunning} />
+          <ChatPanel inferenceRunning={inferenceRunning} activeConfig={activeBackend} />
 
           {/* Inference server info */}
           {inferenceRunning && (

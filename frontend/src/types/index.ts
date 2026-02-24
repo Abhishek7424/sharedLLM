@@ -253,3 +253,14 @@ export type WsEvent =
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 export type Settings = Record<string, string>
+
+// ─── Inference Backends ───────────────────────────────────────────────────────
+
+export type BackendType = 'llamacpp' | 'ollama' | 'lmstudio' | 'vllm' | 'openai' | 'custom'
+
+export interface BackendConfig {
+  backend_type: BackendType
+  url: string
+  model: string
+  api_key?: string
+}

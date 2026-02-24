@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod backends;
 pub mod cluster;
 pub mod devices;
 pub mod gpu;
