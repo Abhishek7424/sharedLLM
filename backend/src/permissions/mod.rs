@@ -80,6 +80,12 @@ impl PermissionService {
 
         queries::insert_device(&self.pool, &device).await?;
 
+        // Re-fetch by IP so we return the canonical row even if INSERT OR IGNORE
+        // silently discarded our insert (TOCTOU race between concurrent discoveries).
+        let device = queries::get_device_by_ip(&self.pool, &device.ip)
+            .await?
+            .unwrap_or(device);
+
         // Broadcast event
         let event = if trust_all {
             WsEvent::DeviceApproved {
@@ -106,7 +112,11 @@ impl PermissionService {
         device_id: &str,
         role_id: Option<&str>,
     ) -> anyhow::Result<Device> {
-        let role = role_id.unwrap_or("role-guest");
+        // Treat missing or empty role_id as "role-guest"
+        let role = match role_id {
+            Some(r) if !r.is_empty() => r,
+            _ => "role-guest",
+        };
         queries::update_device_status(&self.pool, device_id, "approved").await?;
         queries::update_device_role(&self.pool, device_id, role).await?;
 

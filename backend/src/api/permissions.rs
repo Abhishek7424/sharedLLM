@@ -61,7 +61,7 @@ pub async fn update_role(
     Json(req): Json<UpsertRoleRequest>,
 ) -> impl IntoResponse {
     let role = Role {
-        id,
+        id: id.clone(),
         name: req.name,
         max_memory_mb: req.max_memory_mb,
         can_pull_models: req.can_pull_models,
@@ -70,7 +70,18 @@ pub async fn update_role(
     };
 
     match queries::upsert_role(&state.pool, &role).await {
-        Ok(()) => Json(role).into_response(),
+        Ok(()) => {
+            // Re-fetch from DB so created_at reflects the actual stored value
+            match queries::get_role(&state.pool, &id).await {
+                Ok(Some(stored)) => Json(stored).into_response(),
+                Ok(None) => Json(role).into_response(), // fallback (should not happen)
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response(),
+            }
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),

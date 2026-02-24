@@ -69,7 +69,7 @@ export function ModelsPage({ ollamaRunning, ollamaHost }: ModelsPageProps) {
             try {
               const parsed = JSON.parse(line)
               if (parsed.status) {
-                const pct = parsed.completed && parsed.total
+                const pct = parsed.completed !== undefined && parsed.total
                   ? ` (${Math.round((parsed.completed / parsed.total) * 100)}%)`
                   : ''
                 setPullProgress(`${parsed.status}${pct}`)

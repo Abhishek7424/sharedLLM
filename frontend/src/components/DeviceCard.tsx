@@ -1,7 +1,7 @@
 import { clsx } from 'clsx'
 import { Monitor, Wifi, WifiOff, Clock, HardDrive, Check, X, MoreHorizontal } from 'lucide-react'
 import type { Device, DeviceStatus, Role } from '../types'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 interface DeviceCardProps {
   device: Device
@@ -52,6 +52,13 @@ export function DeviceCard({ device, roles, onApprove, onDeny, onAllocate, onRem
   const [selectedRole, setSelectedRole] = useState(roles[0]?.id ?? '')
   const [memInput, setMemInput] = useState(String(device.allocated_memory_mb || 512))
   const [showActions, setShowActions] = useState(false)
+
+  // Sync selectedRole when roles list loads asynchronously
+  useEffect(() => {
+    if (roles.length > 0 && !selectedRole) {
+      setSelectedRole(roles[0].id)
+    }
+  }, [roles, selectedRole])
 
   return (
     <div className={clsx(

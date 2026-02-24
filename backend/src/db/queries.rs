@@ -30,8 +30,8 @@ pub async fn get_device_by_ip(pool: &SqlitePool, ip: &str) -> Result<Option<Devi
 
 pub async fn insert_device(pool: &SqlitePool, d: &Device) -> Result<()> {
     sqlx::query(
-        "INSERT INTO devices (id, name, ip, mac, hostname, platform, role_id, status, discovery_method, allocated_memory_mb, last_seen, first_seen, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO devices (id, name, ip, mac, hostname, platform, role_id, status, discovery_method, allocated_memory_mb, last_seen, first_seen, created_at, rpc_port, rpc_status, memory_total_mb, memory_free_mb)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&d.id)
     .bind(&d.name)
@@ -46,6 +46,10 @@ pub async fn insert_device(pool: &SqlitePool, d: &Device) -> Result<()> {
     .bind(&d.last_seen)
     .bind(&d.first_seen)
     .bind(&d.created_at)
+    .bind(d.rpc_port)
+    .bind(&d.rpc_status)
+    .bind(d.memory_total_mb)
+    .bind(d.memory_free_mb)
     .execute(pool)
     .await?;
     Ok(())

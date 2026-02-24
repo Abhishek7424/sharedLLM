@@ -7,7 +7,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::AppState;
 
@@ -23,34 +23,49 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let mut event_rx = state.event_tx.subscribe();
 
-    // Task: forward broadcast events → WebSocket client
+    // Channel used by recv_task to forward Pong payloads to send_task
+    let (pong_tx, mut pong_rx) = mpsc::channel::<Vec<u8>>(8);
+
+    // Task: forward broadcast events → WebSocket client; also send Pongs
     let send_task = tokio::spawn(async move {
         loop {
-            match event_rx.recv().await {
-                Ok(event) => {
-                    if let Ok(text) = serde_json::to_string(&event) {
-                        if sender.send(Message::Text(text)).await.is_err() {
-                            break;
+            tokio::select! {
+                event = event_rx.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if let Ok(text) = serde_json::to_string(&event) {
+                                if sender.send(Message::Text(text)).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => break,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                pong_data = pong_rx.recv() => {
+                    match pong_data {
+                        Some(data) => {
+                            if sender.send(Message::Pong(data)).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
             }
         }
     });
 
-    // Task: receive messages from client
-    // Axum does NOT auto-respond to Pings — we must send Pong manually.
+    // Task: receive messages from client and handle Ping → Pong
     let recv_task = tokio::spawn(async move {
         while let Some(msg) = receiver.next().await {
             match msg {
                 Ok(Message::Close(_)) => break,
-                Ok(Message::Ping(_data)) => {
-                    // Pong response is handled by the underlying axum WebSocket layer
-                    // when using the default configuration — but send explicitly to be safe.
-                    // Note: we no longer have `sender` here (moved into send_task), so
-                    // we simply let the axum transport handle it via its built-in Ping/Pong.
+                Ok(Message::Ping(data)) => {
+                    if pong_tx.send(data).await.is_err() {
+                        break;
+                    }
                 }
                 _ => {}
             }

@@ -335,7 +335,9 @@ export function InferencePage() {
                 ({clusterStatus?.devices.length ?? 0} approved)
               </span>
             </h2>
-            {clusterStatus?.devices.length === 0 ? (
+            {clusterStatus === null ? (
+              <p className="text-xs text-muted">Loading devices...</p>
+            ) : clusterStatus.devices.length === 0 ? (
               <p className="text-xs text-muted">
                 No approved devices. Go to{' '}
                 <Link to="/devices" className="text-accent hover:underline">

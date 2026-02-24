@@ -91,8 +91,7 @@ impl LlamaCppManager {
     }
 
     pub fn find_inference_server_bin() -> Option<PathBuf> {
-        // Try both naming conventions
-        Self::find_binary("llama-server").or_else(|| Self::find_binary("llama-cli"))
+        Self::find_binary("llama-server")
     }
 
     pub fn get_status_sync(

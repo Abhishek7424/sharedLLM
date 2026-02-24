@@ -59,18 +59,24 @@ pub async fn cluster_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         .collect();
 
     let llama_cpp = state.llama_cpp.clone();
+    let pool = state.pool.clone();
     let probe_futs = probe_data.into_iter().map(
         |(id, name, ip, rpc_port, rpc_status, memory_total_mb, memory_free_mb)| {
             let mgr = llama_cpp.clone();
+            let pool = pool.clone();
             let ip_clone = ip.clone();
+            let id_clone = id.clone();
             async move {
                 let reachable = mgr.probe_rpc_device(&ip_clone, rpc_port as u16).await;
+                let live_status = if reachable { "ready" } else { rpc_status.as_str() };
+                // Persist live probe result to DB so other pages see consistent status
+                let _ = queries::update_device_rpc_status(&pool, &id_clone, live_status).await;
                 serde_json::json!({
                     "id": id,
                     "name": name,
                     "ip": ip,
                     "rpc_port": rpc_port,
-                    "rpc_status": if reachable { "ready" } else { rpc_status.as_str() },
+                    "rpc_status": live_status,
                     "memory_total_mb": memory_total_mb,
                     "memory_free_mb": memory_free_mb,
                 })

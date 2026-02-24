@@ -162,11 +162,19 @@ impl OllamaManager {
 
     /// Delete a model
     pub async fn delete_model(&self, model: &str) -> Result<()> {
-        self.client
+        let resp = self
+            .client
             .delete(format!("{}/api/delete", self.host))
             .json(&serde_json::json!({ "name": model }))
             .send()
             .await?;
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "Ollama delete failed for '{}': HTTP {}",
+                model,
+                resp.status()
+            );
+        }
         Ok(())
     }
 

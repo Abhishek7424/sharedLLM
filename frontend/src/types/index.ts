@@ -31,7 +31,7 @@ export interface Role {
   id: string
   name: string
   max_memory_mb: number
-  can_pull_models: number // 0 | 1
+  can_pull_models: boolean
   trust_level: number
   created_at: string
 }
