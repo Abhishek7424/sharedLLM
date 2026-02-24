@@ -56,15 +56,26 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    // Map to the substring that appears in the GitHub release asset name
-    let asset_keyword = match (os, arch) {
-        ("macos", "aarch64") => "macos-arm64",
-        ("macos", "x86_64") => "macos-x86_64",
-        ("linux", "x86_64") => "ubuntu-x64",
-        ("linux", "aarch64") => "ubuntu-arm64",
-        ("windows", _) => "win-avx2-x64",
+    // Actual asset names from ggml-org/llama.cpp releases (as of b8147+):
+    //   llama-bXXXX-bin-macos-arm64.tar.gz
+    //   llama-bXXXX-bin-macos-x64.tar.gz
+    //   llama-bXXXX-bin-ubuntu-x64.tar.gz
+    //   llama-bXXXX-bin-ubuntu-s390x.tar.gz
+    //   llama-bXXXX-bin-win-cpu-x64.zip
+    //   llama-bXXXX-bin-win-cpu-arm64.zip
+    //
+    // Returns (keyword_in_asset_name, is_zip)
+    let (asset_keyword, is_zip): (&str, bool) = match (os, arch) {
+        ("macos", "aarch64") => ("macos-arm64", false),
+        ("macos", "x86_64") => ("macos-x64", false),
+        ("linux", "x86_64") => ("ubuntu-x64", false),
+        ("linux", "aarch64") => ("ubuntu-arm64", false),
+        ("windows", "aarch64") => ("win-cpu-arm64", true),
+        ("windows", _) => ("win-cpu-x64", true),
         _ => anyhow::bail!("Unsupported platform: {os}/{arch}"),
     };
+
+    let archive_ext = if is_zip { ".zip" } else { ".tar.gz" };
 
     send!(serde_json::json!({
         "status": format!("Platform detected: {os}/{arch}")
@@ -81,7 +92,7 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
         .build()?;
 
     let release: serde_json::Value = client
-        .get("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
+        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
         .send()
         .await
         .map_err(|e| anyhow::anyhow!("GitHub API request failed: {e}"))?
@@ -101,19 +112,19 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
         .iter()
         .find(|a| {
             let name = a["name"].as_str().unwrap_or("");
-            name.contains(asset_keyword) && name.ends_with(".zip")
+            name.contains(asset_keyword) && name.ends_with(archive_ext)
         })
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "No zip asset found matching '{asset_keyword}'. \
-                 Check https://github.com/ggerganov/llama.cpp/releases for available builds."
+                "No asset found matching '{asset_keyword}' with extension '{archive_ext}'. \
+                 Check https://github.com/ggml-org/llama.cpp/releases for available builds."
             )
         })?;
 
     let asset_url = asset["browser_download_url"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Asset has no download URL"))?;
-    let asset_name = asset["name"].as_str().unwrap_or("llama.zip");
+    let asset_name = asset["name"].as_str().unwrap_or("llama.archive");
     let asset_size = asset["size"].as_u64().unwrap_or(0);
 
     send!(serde_json::json!({
@@ -121,10 +132,10 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
     }));
 
     // ── 4. Stream-download to a temp file ────────────────────────────────────
-    let tmp_path = std::env::temp_dir().join("sharedllm_llama_cpp.zip");
+    let tmp_path = std::env::temp_dir().join(format!("sharedllm_llama_cpp{archive_ext}"));
     let mut resp = client
         .get(asset_url)
-        .timeout(std::time::Duration::from_secs(300))
+        .timeout(std::time::Duration::from_secs(600))
         .send()
         .await
         .map_err(|e| anyhow::anyhow!("Download failed: {e}"))?;
@@ -139,8 +150,8 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
 
         if asset_size > 0 {
             let pct = downloaded * 100 / asset_size;
-            // Report every 10%
-            if pct / 10 > last_reported_pct / 10 {
+            // Report every 5%
+            if pct / 5 > last_reported_pct / 5 {
                 last_reported_pct = pct;
                 send!(serde_json::json!({
                     "status": format!("Downloading... {pct}%"),
@@ -165,7 +176,7 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
     };
     tokio::fs::create_dir_all(&install_dir).await?;
 
-    // ── 6. Extract target binaries from the zip (blocking I/O) ───────────────
+    // ── 6. Extract target binaries (blocking I/O) ─────────────────────────────
     let binary_ext = if os == "windows" { ".exe" } else { "" };
     let targets = vec![
         format!("llama-server{binary_ext}"),
@@ -176,46 +187,17 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
     let install_dir_b = install_dir.clone();
     let targets_b = targets.clone();
 
-    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let file = std::fs::File::open(&tmp_path_b)?;
-        let mut archive = zip::ZipArchive::new(file)?;
-        let mut found = Vec::new();
-
-        for i in 0..archive.len() {
-            let mut entry = archive.by_index(i)?;
-            // Use only the filename (last path component) for matching
-            let file_name = entry
-                .enclosed_name()
-                .and_then(|p| p.file_name().map(|n| n.to_os_string()))
-                .unwrap_or_default();
-            let file_name_str = file_name.to_string_lossy();
-
-            if targets_b.iter().any(|t| t.as_str() == file_name_str) {
-                let dest = install_dir_b.join(&*file_name_str);
-                let mut out = std::fs::File::create(&dest)?;
-                std::io::copy(&mut entry, &mut out)?;
-
-                // Make executable on Unix
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
-                }
-
-                found.push(file_name_str.to_string());
-            }
-        }
-
-        if found.is_empty() {
-            anyhow::bail!(
-                "Neither llama-server nor llama-rpc-server found inside the zip. \
-                 The release layout may have changed — try a manual install."
-            );
-        }
-
-        Ok(())
-    })
-    .await??;
+    if is_zip {
+        tokio::task::spawn_blocking(move || {
+            extract_zip(&tmp_path_b, &install_dir_b, &targets_b)
+        })
+        .await??;
+    } else {
+        tokio::task::spawn_blocking(move || {
+            extract_tar_gz(&tmp_path_b, &install_dir_b, &targets_b)
+        })
+        .await??;
+    }
 
     // ── 7. Cleanup temp file ─────────────────────────────────────────────────
     let _ = tokio::fs::remove_file(&tmp_path).await;
@@ -226,5 +208,87 @@ async fn run_install(tx: tokio::sync::mpsc::Sender<String>) -> anyhow::Result<()
         "done": true
     }));
 
+    Ok(())
+}
+
+// ─── Archive extraction helpers ───────────────────────────────────────────────
+
+fn extract_zip(
+    archive_path: &std::path::Path,
+    install_dir: &std::path::Path,
+    targets: &[String],
+) -> anyhow::Result<()> {
+    let file = std::fs::File::open(archive_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut found = Vec::new();
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let file_name = entry
+            .enclosed_name()
+            .and_then(|p| p.file_name().map(|n| n.to_os_string()))
+            .unwrap_or_default();
+        let file_name_str = file_name.to_string_lossy();
+
+        if targets.iter().any(|t| t.as_str() == file_name_str) {
+            let dest = install_dir.join(&*file_name_str);
+            let mut out = std::fs::File::create(&dest)?;
+            std::io::copy(&mut entry, &mut out)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+            }
+
+            found.push(file_name_str.to_string());
+        }
+    }
+
+    if found.is_empty() {
+        anyhow::bail!(
+            "Neither llama-server nor llama-rpc-server found inside the zip archive."
+        );
+    }
+    Ok(())
+}
+
+fn extract_tar_gz(
+    archive_path: &std::path::Path,
+    install_dir: &std::path::Path,
+    targets: &[String],
+) -> anyhow::Result<()> {
+    let file = std::fs::File::open(archive_path)?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    let mut found = Vec::new();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        if targets.iter().any(|t| t.as_str() == file_name) {
+            let dest = install_dir.join(&file_name);
+            entry.unpack(&dest)?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+            }
+
+            found.push(file_name);
+        }
+    }
+
+    if found.is_empty() {
+        anyhow::bail!(
+            "Neither llama-server nor llama-rpc-server found inside the tar.gz archive."
+        );
+    }
     Ok(())
 }
