@@ -1,0 +1,32 @@
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
+backend/target/
+backend/**/*.rs.bk
+Cargo.lock          # keep for binaries; remove this line if you prefer to commit it
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+
+# ── Database & runtime data ───────────────────────────────────────────────────
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+/tmp/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.sw?

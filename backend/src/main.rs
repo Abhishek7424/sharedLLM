@@ -1,0 +1,207 @@
+mod api;
+mod db;
+mod discovery;
+mod memory;
+mod ollama;
+mod permissions;
+mod ws;
+
+use anyhow::Result;
+use axum::{
+    routing::{delete, get, patch, post, put},
+    Router,
+};
+use memory::MemoryProvider;
+use ollama::OllamaManager;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tokio::sync::broadcast;
+use tower_http::{
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
+};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::ws::WsEvent;
+
+// ─── App State ───────────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub event_tx: broadcast::Sender<WsEvent>,
+    pub providers: Vec<Arc<dyn MemoryProvider>>,
+    pub ollama: Arc<OllamaManager>,
+}
+
+// ─── Main ─────────────────────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Logging
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "shared_memory_backend=debug,tower_http=info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    tracing::info!("=== Shared Memory Network starting ===");
+
+    // Database
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:./data/shared_memory.db".to_string());
+    let pool = db::init_pool(&db_url).await?;
+    tracing::info!("Database ready");
+
+    // Memory providers
+    let providers = memory::detect_providers();
+    tracing::info!("Detected {} memory provider(s)", providers.len());
+
+    // WebSocket broadcast channel
+    let (event_tx, _) = broadcast::channel::<WsEvent>(256);
+
+    // Ollama manager
+    let ollama_host = db::queries::get_setting(&pool, "ollama_host")
+        .await
+        .ok()
+        .flatten();
+    let ollama = Arc::new(OllamaManager::new(ollama_host));
+
+    // Auto-start Ollama
+    let auto_start = db::queries::get_setting(&pool, "auto_start_ollama")
+        .await
+        .unwrap_or(None)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+
+    if auto_start {
+        match ollama.ensure_running().await {
+            Ok(()) => {
+                let _ = event_tx.send(WsEvent::OllamaStatus {
+                    running: true,
+                    host: ollama.host.clone(),
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Ollama auto-start failed: {}. Continuing without it.", e);
+                let _ = event_tx.send(WsEvent::OllamaStatus {
+                    running: false,
+                    host: ollama.host.clone(),
+                });
+            }
+        }
+        // Start watchdog
+        ollama.clone().spawn_watchdog();
+    }
+
+    // mDNS: advertise this host
+    let _mdns_daemon = discovery::advertise().ok();
+
+    // mDNS: browse for other devices
+    let mdns_enabled = db::queries::get_setting(&pool, "mdns_enabled")
+        .await
+        .unwrap_or(None)
+        .map(|v| v == "true")
+        .unwrap_or(true);
+
+    if mdns_enabled {
+        discovery::browse(event_tx.clone()).await.ok();
+    }
+
+    // App state
+    let state = Arc::new(AppState {
+        pool: pool.clone(),
+        event_tx: event_tx.clone(),
+        providers,
+        ollama: ollama.clone(),
+    });
+
+    // Spawn GPU stats broadcaster (every 3 seconds)
+    {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(3));
+            loop {
+                ticker.tick().await;
+                let snapshots = memory::aggregate_snapshot_async(&state_clone.providers).await;
+                let _ = state_clone.event_tx.send(WsEvent::MemoryStats { snapshots });
+            }
+        });
+    }
+
+    // mDNS device-auto-register task: listen for DeviceDiscovered events and register them
+    {
+        let pool_clone = pool.clone();
+        let tx_clone = event_tx.clone();
+        let mut rx = event_tx.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                if let WsEvent::DeviceDiscovered { ip, name, hostname: _, method } = event {
+                    let svc = permissions::PermissionService::new(pool_clone.clone(), tx_clone.clone());
+                    if let Err(e) = svc.register_device(name, ip, None, &method).await {
+                        tracing::warn!("Failed to register discovered device: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    // Build router
+    let app = build_router(state);
+
+    // Start server
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    tracing::info!("Server listening on http://{}", addr);
+    tracing::info!("Dashboard: http://localhost:{}", port);
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+fn build_router(state: Arc<AppState>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        // WebSocket
+        .route("/ws", get(api::ws_handler::ws_handler))
+        // Devices
+        .route("/api/devices", get(api::devices::list_devices))
+        .route("/api/devices", post(api::devices::add_device))
+        .route("/api/devices/:id", get(api::devices::get_device))
+        .route("/api/devices/:id", delete(api::devices::delete_device))
+        .route("/api/devices/:id/approve", post(api::devices::approve_device))
+        .route("/api/devices/:id/deny", post(api::devices::deny_device))
+        .route("/api/devices/:id/memory", patch(api::devices::allocate_memory))
+        // GPU / Memory stats
+        .route("/api/gpu", get(api::gpu::get_gpu_stats))
+        // Models / Ollama
+        .route("/api/models", get(api::models::list_models))
+        .route("/api/models/pull", post(api::models::pull_model))
+        .route("/api/models/:name", delete(api::models::delete_model))
+        .route("/api/ollama/status", get(api::models::ollama_status))
+        // Permissions / Roles
+        .route("/api/permissions/roles", get(api::permissions::list_roles))
+        .route("/api/permissions/roles", post(api::permissions::create_role))
+        .route("/api/permissions/roles/:id", put(api::permissions::update_role))
+        .route("/api/permissions/roles/:id", delete(api::permissions::delete_role))
+        // Settings
+        .route("/api/settings", get(api::settings::list_settings))
+        .route("/api/settings/:key", put(api::settings::update_setting))
+        // Serve static frontend (production)
+        .nest_service(
+            "/",
+            tower_http::services::ServeDir::new("../frontend/dist")
+                .not_found_service(tower_http::services::ServeFile::new("../frontend/dist/index.html")),
+        )
+        .layer(cors)
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
