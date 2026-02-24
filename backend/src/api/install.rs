@@ -263,6 +263,11 @@ fn extract_tar_gz(
     let mut archive = tar::Archive::new(gz);
     let mut found = Vec::new();
 
+    // In recent llama.cpp releases the RPC server is named "rpc-server"
+    // instead of "llama-rpc-server". Accept both and install under the
+    // canonical "llama-rpc-server" name so the app always finds it.
+    let rpc_aliases = ["llama-rpc-server", "rpc-server"];
+
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
@@ -271,24 +276,59 @@ fn extract_tar_gz(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        if targets.iter().any(|t| t.as_str() == file_name) {
-            let dest = install_dir.join(&file_name);
-            entry.unpack(&dest)?;
+        // Check against primary targets or known RPC aliases
+        let dest_name = if targets.iter().any(|t| t.as_str() == file_name) {
+            file_name.clone()
+        } else if rpc_aliases.contains(&file_name.as_str())
+            && targets.iter().any(|t| t.contains("rpc-server"))
+        {
+            // Normalise to "llama-rpc-server" regardless of archive name
+            targets
+                .iter()
+                .find(|t| t.contains("rpc-server"))
+                .cloned()
+                .unwrap_or(file_name.clone())
+        } else {
+            continue;
+        };
 
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
-            }
+        let dest = install_dir.join(&dest_name);
+        entry.unpack(&dest)?;
 
-            found.push(file_name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
         }
+
+        found.push(dest_name);
     }
 
     if found.is_empty() {
         anyhow::bail!(
-            "Neither llama-server nor llama-rpc-server found inside the tar.gz archive."
+            "Neither llama-server nor llama-rpc-server (or rpc-server) found inside the tar.gz archive."
         );
     }
+
+    // Also copy any .dylib/.so files next to the binaries so they can load
+    let file2 = std::fs::File::open(archive_path)?;
+    let gz2 = flate2::read::GzDecoder::new(file2);
+    let mut archive2 = tar::Archive::new(gz2);
+    for entry in archive2.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let is_lib = file_name.ends_with(".dylib")
+            || file_name.ends_with(".so")
+            || file_name.ends_with(".dll");
+        if is_lib {
+            let dest = install_dir.join(&file_name);
+            let _ = entry.unpack(&dest); // best-effort
+        }
+    }
+
     Ok(())
 }
