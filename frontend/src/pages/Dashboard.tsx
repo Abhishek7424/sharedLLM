@@ -1,4 +1,5 @@
 import { Monitor, HardDrive, Clock, Cpu, Wifi, WifiOff } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { clsx } from 'clsx'
 import type { Device, MemorySnapshot, OllamaModel } from '../types'
 import { MemoryBar } from '../components/MemoryBar'
@@ -130,7 +131,7 @@ export function Dashboard({ devices, snapshots, ollamaRunning, models }: Dashboa
                   ) : (
                     <p className="text-xs text-muted">
                       Agent not running · port {d.rpc_port} ·{' '}
-                      <a href="/agent" className="text-accent hover:underline">Install agent</a>
+                      <Link to="/agent" className="text-accent hover:underline">Install agent</Link>
                     </p>
                   )}
                 </div>

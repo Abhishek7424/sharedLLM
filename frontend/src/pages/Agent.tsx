@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { Copy, Check, Terminal, Monitor, Server } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
@@ -99,14 +100,14 @@ export function AgentPage() {
           <li className="flex gap-3">
             <span className="w-5 h-5 rounded-full bg-accent/20 text-accent text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
             <span>Approve the device in the{' '}
-              <a href="/devices" className="text-accent hover:underline">Devices</a>{' '}
+              <Link to="/devices" className="text-accent hover:underline">Devices</Link>{' '}
               tab (it will appear automatically via mDNS).
             </span>
           </li>
           <li className="flex gap-3">
             <span className="w-5 h-5 rounded-full bg-accent/20 text-accent text-xs flex items-center justify-center flex-shrink-0 mt-0.5">4</span>
             <span>Go to{' '}
-              <a href="/inference" className="text-accent hover:underline">Inference</a>{' '}
+              <Link to="/inference" className="text-accent hover:underline">Inference</Link>{' '}
               and select the device to distribute model layers across the cluster.
             </span>
           </li>

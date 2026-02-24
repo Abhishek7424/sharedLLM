@@ -58,15 +58,15 @@ pub async fn agent_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
     let rpc_port = state.llama_cpp.rpc_port;
 
     let linux_cmd = format!(
-        "curl -fsSL http://{}:{}/agent/install?os=linux | bash",
+        r#"curl -fsSL "http://{}:{}/agent/install?os=linux" | bash"#,
         host_ip, dashboard_port
     );
     let macos_cmd = format!(
-        "curl -fsSL http://{}:{}/agent/install?os=macos | bash",
+        r#"curl -fsSL "http://{}:{}/agent/install?os=macos" | bash"#,
         host_ip, dashboard_port
     );
     let windows_cmd = format!(
-        "irm http://{}:{}/agent/install?os=windows | iex",
+        "irm \"http://{}:{}/agent/install?os=windows\" | iex",
         host_ip, dashboard_port
     );
 
@@ -108,10 +108,8 @@ case "$ARCH" in
 esac
 
 # Get latest llama.cpp release
-RELEASE_URL="https://github.com/ggerganov/llama.cpp/releases/latest/download/llama-b0000-bin-ubuntu-x64.zip"
 echo "[SharedLLM] Fetching latest llama.cpp release info..."
 LATEST_TAG=$(curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-BUILD_NUM=$(echo "$LATEST_TAG" | sed 's/b//')
 
 DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/$LATEST_TAG/llama-$LATEST_TAG-bin-ubuntu-$LLAMA_ARCH.zip"
 

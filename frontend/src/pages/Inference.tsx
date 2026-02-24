@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
@@ -337,13 +338,13 @@ export function InferencePage() {
             {clusterStatus?.devices.length === 0 ? (
               <p className="text-xs text-muted">
                 No approved devices. Go to{' '}
-                <a href="/devices" className="text-accent hover:underline">
+                <Link to="/devices" className="text-accent hover:underline">
                   Devices
-                </a>{' '}
+                </Link>{' '}
                 to approve network machines, then have them run the agent (see{' '}
-                <a href="/agent" className="text-accent hover:underline">
+                <Link to="/agent" className="text-accent hover:underline">
                   Agent
-                </a>
+                </Link>
                 ).
               </p>
             ) : (

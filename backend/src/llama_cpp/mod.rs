@@ -114,7 +114,22 @@ impl LlamaCppManager {
     }
 
     pub async fn get_status(&self) -> LlamaCppStatus {
-        let state = self.state.lock().await;
+        let mut state = self.state.lock().await;
+
+        // Reap any processes that have already exited so the UI shows correct status
+        if let Some(child) = state.rpc_process.as_mut() {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                state.rpc_process = None;
+                tracing::info!("llama-rpc-server exited unexpectedly");
+            }
+        }
+        if let Some(child) = state.inference_process.as_mut() {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                state.inference_process = None;
+                tracing::info!("llama-server exited unexpectedly");
+            }
+        }
+
         LlamaCppStatus {
             rpc_server_running: state.rpc_process.is_some(),
             inference_running: state.inference_process.is_some(),
@@ -171,8 +186,16 @@ impl LlamaCppManager {
     }
 
     pub async fn is_rpc_running(&self) -> bool {
-        let state = self.state.lock().await;
-        state.rpc_process.is_some()
+        let mut state = self.state.lock().await;
+        if let Some(child) = state.rpc_process.as_mut() {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                state.rpc_process = None;
+                return false;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     // ─── Inference server ─────────────────────────────────────────────────
@@ -272,8 +295,16 @@ impl LlamaCppManager {
     }
 
     pub async fn is_inference_running(&self) -> bool {
-        let state = self.state.lock().await;
-        state.inference_process.is_some()
+        let mut state = self.state.lock().await;
+        if let Some(child) = state.inference_process.as_mut() {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                state.inference_process = None;
+                return false;
+            }
+            true
+        } else {
+            false
+        }
     }
 
     pub async fn get_current_session(&self) -> Option<InferenceSessionInfo> {
@@ -297,11 +328,15 @@ impl LlamaCppManager {
             .unwrap_or(false)
     }
 
-    /// Check if a remote device's RPC server is reachable
+    /// Check if a remote device's RPC server is reachable.
+    /// Uses a 2-second TCP connect timeout so offline devices don't block the UI.
     pub async fn probe_rpc_device(&self, ip: &str, port: u16) -> bool {
-        // Just try a TCP connect — we don't need HTTP here
-        tokio::net::TcpStream::connect(format!("{}:{}", ip, port))
-            .await
-            .is_ok()
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio::net::TcpStream::connect(format!("{}:{}", ip, port)),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false)
     }
 }

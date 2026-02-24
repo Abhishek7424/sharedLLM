@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use futures::future::join_all;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -41,23 +42,42 @@ pub async fn cluster_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         .filter(|d| d.status == "approved")
         .collect();
 
-    // Probe each approved device's RPC port to get live status
-    let mut device_statuses = Vec::new();
-    for device in &approved {
-        let reachable = state
-            .llama_cpp
-            .probe_rpc_device(&device.ip, device.rpc_port as u16)
-            .await;
-        device_statuses.push(serde_json::json!({
-            "id": device.id,
-            "name": device.name,
-            "ip": device.ip,
-            "rpc_port": device.rpc_port,
-            "rpc_status": if reachable { "ready" } else { &device.rpc_status },
-            "memory_total_mb": device.memory_total_mb,
-            "memory_free_mb": device.memory_free_mb,
-        }));
-    }
+    // Probe all approved devices in parallel (each with a 2-second timeout)
+    let probe_data: Vec<_> = approved
+        .iter()
+        .map(|d| {
+            (
+                d.id.clone(),
+                d.name.clone(),
+                d.ip.clone(),
+                d.rpc_port,
+                d.rpc_status.clone(),
+                d.memory_total_mb,
+                d.memory_free_mb,
+            )
+        })
+        .collect();
+
+    let llama_cpp = state.llama_cpp.clone();
+    let probe_futs = probe_data.into_iter().map(
+        |(id, name, ip, rpc_port, rpc_status, memory_total_mb, memory_free_mb)| {
+            let mgr = llama_cpp.clone();
+            let ip_clone = ip.clone();
+            async move {
+                let reachable = mgr.probe_rpc_device(&ip_clone, rpc_port as u16).await;
+                serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "ip": ip,
+                    "rpc_port": rpc_port,
+                    "rpc_status": if reachable { "ready" } else { rpc_status.as_str() },
+                    "memory_total_mb": memory_total_mb,
+                    "memory_free_mb": memory_free_mb,
+                })
+            }
+        },
+    );
+    let device_statuses: Vec<_> = join_all(probe_futs).await;
 
     let llama_status = state.llama_cpp.get_status().await;
 
