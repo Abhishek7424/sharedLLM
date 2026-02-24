@@ -38,4 +38,37 @@ pub enum WsEvent {
     OllamaStatus { running: bool, host: String },
     /// Generic error notification
     Error { message: String },
+
+    // ─── Distributed inference (llama.cpp RPC) ────────────────────────────
+
+    /// Local llama-rpc-server started successfully
+    RpcServerReady { port: i64 },
+    /// Local llama-rpc-server stopped or crashed
+    RpcServerOffline,
+    /// A remote device's RPC agent is now reachable
+    RpcDeviceReady {
+        device_id: String,
+        memory_total_mb: i64,
+        memory_free_mb: i64,
+    },
+    /// A remote device's RPC agent went offline
+    RpcDeviceOffline { device_id: String },
+    /// llama-server inference process started
+    InferenceStarted {
+        session_id: String,
+        model: String,
+        devices: Vec<String>,
+    },
+    /// llama-server inference process stopped
+    InferenceStopped { session_id: String },
+    /// Layer assignment across devices (informational)
+    LayerAssignment {
+        assignments: Vec<LayerAssignment>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerAssignment {
+    pub device_id: String,
+    pub layers: String, // e.g. "0-15"
 }

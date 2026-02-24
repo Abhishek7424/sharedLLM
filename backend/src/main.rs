@@ -1,6 +1,7 @@
 mod api;
 mod db;
 mod discovery;
+mod llama_cpp;
 mod memory;
 mod ollama;
 mod permissions;
@@ -11,6 +12,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
+use llama_cpp::LlamaCppManager;
 use memory::MemoryProvider;
 use ollama::OllamaManager;
 use sqlx::SqlitePool;
@@ -32,6 +34,7 @@ pub struct AppState {
     pub event_tx: broadcast::Sender<WsEvent>,
     pub providers: Vec<Arc<dyn MemoryProvider>>,
     pub ollama: Arc<OllamaManager>,
+    pub llama_cpp: Arc<LlamaCppManager>,
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -68,6 +71,17 @@ async fn main() -> Result<()> {
         .ok()
         .flatten();
     let ollama = Arc::new(OllamaManager::new(ollama_host));
+
+    // llama.cpp manager (for distributed inference)
+    let llama_cpp = Arc::new(LlamaCppManager::new(event_tx.clone()));
+    tracing::info!(
+        "llama-rpc-server: {}",
+        if LlamaCppManager::find_rpc_server_bin().is_some() { "found" } else { "not found" }
+    );
+    tracing::info!(
+        "llama-server: {}",
+        if LlamaCppManager::find_inference_server_bin().is_some() { "found" } else { "not found" }
+    );
 
     // Auto-start Ollama
     let auto_start = db::queries::get_setting(&pool, "auto_start_ollama")
@@ -116,6 +130,7 @@ async fn main() -> Result<()> {
         event_tx: event_tx.clone(),
         providers,
         ollama: ollama.clone(),
+        llama_cpp: llama_cpp.clone(),
     });
 
     // Spawn GPU stats broadcaster (every 3 seconds)
@@ -195,6 +210,18 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Settings
         .route("/api/settings", get(api::settings::list_settings))
         .route("/api/settings/:key", put(api::settings::update_setting))
+        // Cluster / Distributed inference
+        .route("/api/cluster/status", get(api::cluster::cluster_status))
+        .route("/api/cluster/inference/start", post(api::cluster::start_inference))
+        .route("/api/cluster/inference/stop", post(api::cluster::stop_inference))
+        .route("/api/cluster/inference/status", get(api::cluster::inference_status))
+        .route("/api/cluster/rpc/start", post(api::cluster::start_rpc_server))
+        .route("/api/cluster/rpc/stop", post(api::cluster::stop_rpc_server))
+        // OpenAI-compatible chat proxy → llama-server
+        .route("/v1/chat/completions", post(api::cluster::chat_completions_proxy))
+        // Agent install scripts
+        .route("/agent/install", get(api::agent::install_script))
+        .route("/agent/info", get(api::agent::agent_info))
         // Serve static frontend (production)
         .nest_service(
             "/",

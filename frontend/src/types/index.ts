@@ -2,6 +2,7 @@
 
 export type DeviceStatus = 'pending' | 'approved' | 'denied' | 'suspended' | 'offline'
 export type DiscoveryMethod = 'mdns' | 'manual'
+export type RpcStatus = 'offline' | 'connecting' | 'ready' | 'error'
 
 export interface Device {
   id: string
@@ -17,6 +18,11 @@ export interface Device {
   last_seen?: string
   first_seen: string
   created_at: string
+  // Distributed inference fields
+  rpc_port: number
+  rpc_status: RpcStatus
+  memory_total_mb: number
+  memory_free_mb: number
 }
 
 // ─── Role ─────────────────────────────────────────────────────────────────────
@@ -53,6 +59,61 @@ export interface OllamaModel {
   modified_at: string
 }
 
+// ─── Distributed inference ────────────────────────────────────────────────────
+
+export interface InferenceSessionInfo {
+  id: string
+  model_path: string
+  status: string // starting | running | stopped | error
+  rpc_devices: string[] // "ip:port" strings
+  started_at: string
+}
+
+export interface LlamaCppStatus {
+  rpc_server_running: boolean
+  inference_running: boolean
+  rpc_server_bin: boolean
+  inference_server_bin: boolean
+  rpc_port: number
+  inference_port: number
+  current_session?: InferenceSessionInfo
+}
+
+export interface ClusterDeviceStatus {
+  id: string
+  name: string
+  ip: string
+  rpc_port: number
+  rpc_status: RpcStatus
+  memory_total_mb: number
+  memory_free_mb: number
+}
+
+export interface ClusterStatus {
+  devices: ClusterDeviceStatus[]
+  llama_cpp: LlamaCppStatus
+  current_session?: InferenceSessionInfo
+}
+
+export interface AgentInfo {
+  host_ip: string
+  dashboard_port: string
+  rpc_port: number
+  install_commands: {
+    linux: string
+    macos: string
+    windows: string
+  }
+  rpc_server_bin_available: boolean
+}
+
+// ─── Chat (OpenAI-compatible) ─────────────────────────────────────────────────
+
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+}
+
 // ─── WebSocket Events ─────────────────────────────────────────────────────────
 
 export type WsEventType =
@@ -65,6 +126,13 @@ export type WsEventType =
   | 'memory_stats'
   | 'ollama_status'
   | 'error'
+  | 'rpc_server_ready'
+  | 'rpc_server_offline'
+  | 'rpc_device_ready'
+  | 'rpc_device_offline'
+  | 'inference_started'
+  | 'inference_stopped'
+  | 'layer_assignment'
 
 export interface WsEventDeviceDiscovered {
   type: 'device_discovered'
@@ -121,6 +189,49 @@ export interface WsEventError {
   message: string
 }
 
+export interface WsEventRpcServerReady {
+  type: 'rpc_server_ready'
+  port: number
+}
+
+export interface WsEventRpcServerOffline {
+  type: 'rpc_server_offline'
+}
+
+export interface WsEventRpcDeviceReady {
+  type: 'rpc_device_ready'
+  device_id: string
+  memory_total_mb: number
+  memory_free_mb: number
+}
+
+export interface WsEventRpcDeviceOffline {
+  type: 'rpc_device_offline'
+  device_id: string
+}
+
+export interface WsEventInferenceStarted {
+  type: 'inference_started'
+  session_id: string
+  model: string
+  devices: string[]
+}
+
+export interface WsEventInferenceStopped {
+  type: 'inference_stopped'
+  session_id: string
+}
+
+export interface LayerAssignment {
+  device_id: string
+  layers: string
+}
+
+export interface WsEventLayerAssignment {
+  type: 'layer_assignment'
+  assignments: LayerAssignment[]
+}
+
 export type WsEvent =
   | WsEventDeviceDiscovered
   | WsEventPendingApproval
@@ -131,6 +242,13 @@ export type WsEvent =
   | WsEventMemoryStats
   | WsEventOllamaStatus
   | WsEventError
+  | WsEventRpcServerReady
+  | WsEventRpcServerOffline
+  | WsEventRpcDeviceReady
+  | WsEventRpcDeviceOffline
+  | WsEventInferenceStarted
+  | WsEventInferenceStopped
+  | WsEventLayerAssignment
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 

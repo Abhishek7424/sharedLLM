@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod cluster;
 pub mod devices;
 pub mod gpu;
 pub mod models;

@@ -88,4 +88,36 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value }),
     }).then(checkOk).then(r => r.json()),
+
+  // Cluster / Distributed inference
+  clusterStatus: () =>
+    fetch(`${API_BASE}/api/cluster/status`).then(checkOk).then(r => r.json()),
+  inferenceStatus: () =>
+    fetch(`${API_BASE}/api/cluster/inference/status`).then(checkOk).then(r => r.json()),
+  startInference: (model_path: string, device_ids: string[]) =>
+    fetch(`${API_BASE}/api/cluster/inference/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_path, device_ids }),
+    }).then(checkOk).then(r => r.json()),
+  stopInference: () =>
+    fetch(`${API_BASE}/api/cluster/inference/stop`, { method: 'POST' }).then(checkOk).then(r => r.json()),
+  startRpcServer: () =>
+    fetch(`${API_BASE}/api/cluster/rpc/start`, { method: 'POST' }).then(checkOk).then(r => r.json()),
+  stopRpcServer: () =>
+    fetch(`${API_BASE}/api/cluster/rpc/stop`, { method: 'POST' }).then(checkOk).then(r => r.json()),
+
+  // Agent install info
+  agentInfo: () =>
+    fetch(`${API_BASE}/agent/info`).then(checkOk).then(r => r.json()),
+  agentInstallUrl: (os: 'linux' | 'macos' | 'windows') =>
+    `${API_BASE}/agent/install?os=${os}`,
+
+  // OpenAI-compatible chat (proxied to llama-server)
+  chatCompletions: (messages: Array<{ role: string; content: string }>, model = 'local', stream = false) =>
+    fetch(`${API_BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream }),
+    }),
 }

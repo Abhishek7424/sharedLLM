@@ -10,6 +10,8 @@ import { DevicesPage } from './pages/Devices'
 import { PermissionsPage } from './pages/Permissions'
 import { ModelsPage } from './pages/Models'
 import { SettingsPage } from './pages/Settings'
+import { InferencePage } from './pages/Inference'
+import { AgentPage } from './pages/Agent'
 
 import { useWebSocket } from './hooks/useWebSocket'
 import { useDevices } from './hooks/useDevices'
@@ -56,6 +58,10 @@ export default function App() {
 
   const [approvalRequests, setApprovalRequests] = useState<ApprovalRequest[]>([])
 
+  // Distributed inference state (tracked for cross-page awareness via WS)
+  const [, setRpcRunning] = useState(false)
+  const [, setInferenceRunning] = useState(false)
+
   const handleWsEvent = useCallback((event: WsEvent) => {
     switch (event.type) {
       case 'device_pending_approval':
@@ -87,6 +93,22 @@ export default function App() {
       case 'ollama_status':
         setOllamaRunning(event.running)
         setOllamaHost(event.host)
+        break
+      case 'rpc_server_ready':
+        setRpcRunning(true)
+        break
+      case 'rpc_server_offline':
+        setRpcRunning(false)
+        break
+      case 'rpc_device_ready':
+      case 'rpc_device_offline':
+        refreshDevices()
+        break
+      case 'inference_started':
+        setInferenceRunning(true)
+        break
+      case 'inference_stopped':
+        setInferenceRunning(false)
         break
     }
   }, [refreshDevices, updateFromWs])
@@ -128,6 +150,8 @@ export default function App() {
             <Route path="/models" element={
               <ModelsPage ollamaRunning={ollamaRunning} ollamaHost={ollamaHost} />
             } />
+            <Route path="/inference" element={<InferencePage />} />
+            <Route path="/agent" element={<AgentPage />} />
             <Route path="/settings" element={
               <SettingsPage settings={settings} onSettingsChange={setSettings} />
             } />

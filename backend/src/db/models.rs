@@ -19,6 +19,11 @@ pub struct Device {
     pub last_seen: Option<String>,
     pub first_seen: String,
     pub created_at: String,
+    // RPC / distributed inference fields (added in migration 0003)
+    pub rpc_port: i64,
+    pub rpc_status: String, // offline | connecting | ready | error
+    pub memory_total_mb: i64,
+    pub memory_free_mb: i64,
 }
 
 impl Device {
@@ -38,6 +43,10 @@ impl Device {
             last_seen: Some(now.clone()),
             first_seen: now.clone(),
             created_at: now,
+            rpc_port: 8181,
+            rpc_status: "offline".into(),
+            memory_total_mb: 0,
+            memory_free_mb: 0,
         }
     }
 }
@@ -72,4 +81,29 @@ pub struct Allocation {
 pub struct Setting {
     pub key: String,
     pub value: String,
+}
+
+// ─── InferenceSession ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct InferenceSession {
+    pub id: String,
+    pub model_path: String,
+    pub status: String, // starting | running | stopped | error
+    pub devices: String, // JSON array of device IDs
+    pub started_at: String,
+    pub stopped_at: Option<String>,
+}
+
+impl InferenceSession {
+    pub fn new(model_path: String, device_ids: Vec<String>) -> Self {
+        InferenceSession {
+            id: Uuid::new_v4().to_string(),
+            model_path,
+            status: "starting".into(),
+            devices: serde_json::to_string(&device_ids).unwrap_or_else(|_| "[]".into()),
+            started_at: Utc::now().to_rfc3339(),
+            stopped_at: None,
+        }
+    }
 }

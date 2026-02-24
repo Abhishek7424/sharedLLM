@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlx::SqlitePool;
 
-use super::models::{Allocation, Device, Role, Setting};
+use super::models::{Allocation, Device, InferenceSession, Role, Setting};
 
 // ─── Device queries ──────────────────────────────────────────────────────────
 
@@ -82,6 +82,34 @@ pub async fn update_device_last_seen(pool: &SqlitePool, id: &str) -> Result<()> 
     let now = chrono::Utc::now().to_rfc3339();
     sqlx::query("UPDATE devices SET last_seen = ? WHERE id = ?")
         .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_device_rpc(
+    pool: &SqlitePool,
+    id: &str,
+    rpc_status: &str,
+    memory_total_mb: i64,
+    memory_free_mb: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE devices SET rpc_status = ?, memory_total_mb = ?, memory_free_mb = ? WHERE id = ?",
+    )
+    .bind(rpc_status)
+    .bind(memory_total_mb)
+    .bind(memory_free_mb)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_device_rpc_status(pool: &SqlitePool, id: &str, rpc_status: &str) -> Result<()> {
+    sqlx::query("UPDATE devices SET rpc_status = ? WHERE id = ?")
+        .bind(rpc_status)
         .bind(id)
         .execute(pool)
         .await?;
@@ -200,4 +228,45 @@ pub async fn list_settings(pool: &SqlitePool) -> Result<Vec<Setting>> {
         .fetch_all(pool)
         .await?;
     Ok(settings)
+}
+
+// ─── InferenceSession queries ─────────────────────────────────────────────────
+
+pub async fn insert_inference_session(pool: &SqlitePool, s: &InferenceSession) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO inference_sessions (id, model_path, status, devices, started_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&s.id)
+    .bind(&s.model_path)
+    .bind(&s.status)
+    .bind(&s.devices)
+    .bind(&s.started_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_inference_session_status(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    stopped_at: Option<&str>,
+) -> Result<()> {
+    sqlx::query("UPDATE inference_sessions SET status = ?, stopped_at = ? WHERE id = ?")
+        .bind(status)
+        .bind(stopped_at)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_latest_inference_session(pool: &SqlitePool) -> Result<Option<InferenceSession>> {
+    let session = sqlx::query_as::<_, InferenceSession>(
+        "SELECT * FROM inference_sessions ORDER BY started_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(session)
 }
