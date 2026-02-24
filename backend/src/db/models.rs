@@ -83,27 +83,3 @@ pub struct Setting {
     pub value: String,
 }
 
-// ─── InferenceSession ────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct InferenceSession {
-    pub id: String,
-    pub model_path: String,
-    pub status: String, // starting | running | stopped | error
-    pub devices: String, // JSON array of device IDs
-    pub started_at: String,
-    pub stopped_at: Option<String>,
-}
-
-impl InferenceSession {
-    pub fn new(model_path: String, device_ids: Vec<String>) -> Self {
-        InferenceSession {
-            id: Uuid::new_v4().to_string(),
-            model_path,
-            status: "starting".into(),
-            devices: serde_json::to_string(&device_ids).unwrap_or_else(|_| "[]".into()),
-            started_at: Utc::now().to_rfc3339(),
-            stopped_at: None,
-        }
-    }
-}
