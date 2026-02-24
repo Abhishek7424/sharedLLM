@@ -106,6 +106,12 @@ export const api = {
     fetch(`${API_BASE}/api/cluster/rpc/start`, { method: 'POST' }).then(checkOk).then(r => r.json()),
   stopRpcServer: () =>
     fetch(`${API_BASE}/api/cluster/rpc/stop`, { method: 'POST' }).then(checkOk).then(r => r.json()),
+  /**
+   * Download + install llama-server and llama-rpc-server into ~/.sharedmem/bin/.
+   * Returns a raw Response — caller reads the body as NDJSON progress stream.
+   */
+  installBinaries: () =>
+    fetch(`${API_BASE}/api/cluster/install-binaries`, { method: 'POST' }),
 
   // Agent install info
   agentInfo: () =>

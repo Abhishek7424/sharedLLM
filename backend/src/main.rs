@@ -217,6 +217,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/cluster/inference/status", get(api::cluster::inference_status))
         .route("/api/cluster/rpc/start", post(api::cluster::start_rpc_server))
         .route("/api/cluster/rpc/stop", post(api::cluster::stop_rpc_server))
+        // Binary installer (streams NDJSON progress)
+        .route("/api/cluster/install-binaries", post(api::install::install_binaries))
         // OpenAI-compatible chat proxy → llama-server
         .route("/v1/chat/completions", post(api::cluster::chat_completions_proxy))
         // Agent install scripts

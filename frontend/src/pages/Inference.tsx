@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw } from 'lucide-react'
+import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
 import type { ClusterStatus, ChatMessage, InferenceSessionInfo } from '../types'
@@ -220,6 +220,57 @@ export function InferencePage() {
     }
   }
 
+  const [installing, setInstalling] = useState(false)
+  const [installStatus, setInstallStatus] = useState('')
+  const [installError, setInstallError] = useState<string | null>(null)
+
+  async function handleInstallBinaries() {
+    setInstalling(true)
+    setInstallStatus('Starting...')
+    setInstallError(null)
+    try {
+      const resp = await api.installBinaries()
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
+        setInstallError(err.error ?? `HTTP ${resp.status}`)
+        return
+      }
+      const reader = resp.body?.getReader()
+      if (!reader) {
+        setInstallError('No response body')
+        return
+      }
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const msg = JSON.parse(trimmed)
+            if (msg.status) setInstallStatus(msg.status)
+            if (msg.error) { setInstallError(msg.error); return }
+            if (msg.done) {
+              setInstallStatus('Done!')
+              await refresh()
+            }
+          } catch {
+            // ignore non-JSON lines
+          }
+        }
+      }
+    } catch (e: unknown) {
+      setInstallError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setInstalling(false)
+    }
+  }
+
   function toggleDevice(id: string) {
     setSelectedDeviceIds(prev =>
       prev.includes(id) ? prev.filter(d => d !== id) : [...prev, id]
@@ -263,18 +314,38 @@ export function InferencePage() {
           </div>
         </div>
         {(!rpcBinAvailable || !inferenceBinAvailable) && (
-          <p className="text-xs text-warning mt-2">
-            Install llama.cpp and add the binaries to your PATH, or place them in{' '}
-            <code className="font-mono">~/.sharedmem/bin/</code>.{' '}
-            <a
-              href="https://github.com/ggerganov/llama.cpp/releases"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-accent hover:underline"
-            >
-              Download from GitHub
-            </a>
-          </p>
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-warning">
+              llama.cpp binaries not found in PATH or{' '}
+              <code className="font-mono">~/.sharedmem/bin/</code>.
+            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={handleInstallBinaries}
+                disabled={installing}
+                className="btn-primary flex items-center gap-1.5 text-xs px-3 py-1.5 disabled:opacity-50"
+              >
+                {installing
+                  ? <Loader2 size={13} className="animate-spin" />
+                  : <Download size={13} />}
+                {installing ? 'Installing...' : 'Install Automatically'}
+              </button>
+              <a
+                href="https://github.com/ggerganov/llama.cpp/releases"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-accent hover:underline"
+              >
+                Manual Download
+              </a>
+            </div>
+            {installStatus && !installError && (
+              <p className="text-xs text-accent font-mono animate-pulse">{installStatus}</p>
+            )}
+            {installError && (
+              <p className="text-xs text-danger">{installError}</p>
+            )}
+          </div>
         )}
       </div>
 

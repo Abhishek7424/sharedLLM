@@ -2,6 +2,7 @@ pub mod agent;
 pub mod cluster;
 pub mod devices;
 pub mod gpu;
+pub mod install;
 pub mod models;
 pub mod permissions;
 pub mod settings;

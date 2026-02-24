@@ -52,6 +52,9 @@ thiserror = "1"
 # Process management
 which = "6"
 
+# ZIP archive extraction (for llama.cpp binary installer)
+zip = "2"
+
 # Hostname detection
 hostname = "0.4"
 
