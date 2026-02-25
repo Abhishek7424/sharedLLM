@@ -79,7 +79,7 @@ if [ -z "$SKIP_OPENWEBUI" ]; then
     "$PYTHON" -m pip install open-webui --break-system-packages -q
   fi
 
-  export PORT=3000
+  export PORT=3001
   export HOST="0.0.0.0"
   export OPENAI_API_BASE_URL="http://localhost:8080/v1"
   export OPENAI_API_KEY="sk-sharedllm"
@@ -97,7 +97,7 @@ fi
 sleep 2
 
 echo "  Backend      →  http://localhost:8080"
-echo "  Chat (WebUI) →  http://localhost:3000"
+  echo "  Chat (WebUI) →  http://localhost:3001"
 echo "  API          →  http://localhost:8080/api"
 echo "  WebSocket    →  ws://localhost:8080/ws"
 echo ""

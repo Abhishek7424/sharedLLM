@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────
-#  Start Open WebUI on port 3000, pre-configured to use the
+#  Start Open WebUI on port 3001, pre-configured to use the
 #  SharedLLM backend (port 8080) as its OpenAI-compatible endpoint.
 # ─────────────────────────────────────────────────────────────────
 
@@ -21,13 +21,13 @@ if ! "$PYTHON" -m open_webui --help &>/dev/null 2>&1; then
   "$PYTHON" -m pip install open-webui --break-system-packages
 fi
 
-echo "Starting Open WebUI on http://localhost:3000"
+echo "Starting Open WebUI on http://localhost:3001"
 echo "  → AI backend : http://localhost:8080/v1 (SharedLLM llama-server proxy)"
 echo "  → Auth       : disabled (local-only mode)"
 echo ""
 
 # ── Environment ──────────────────────────────────────────────────
-export PORT=3000
+export PORT=3001
 export HOST="0.0.0.0"
 
 # Point Open WebUI at the SharedLLM Axum proxy (always reachable on 8080).

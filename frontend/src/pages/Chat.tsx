@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { MessageSquare, RefreshCw, ExternalLink, AlertCircle, Loader2 } from 'lucide-react'
 
-const OPENWEBUI_URL = 'http://localhost:3000'
+const OPENWEBUI_URL = 'http://localhost:3001'
 const POLL_INTERVAL_MS = 3000
 
 type Status = 'checking' | 'online' | 'offline'
@@ -125,7 +125,7 @@ function OfflineState({ onRetry }: { onRetry: () => void }) {
         <p className="text-sm text-muted mb-6 leading-relaxed">
           Start Open WebUI by running the script below in a terminal. It will launch on{' '}
           <code className="text-accent bg-accent/10 px-1 py-0.5 rounded text-xs">
-            localhost:3000
+            localhost:3001
           </code>{' '}
           and automatically connect to your SharedLLM inference backend.
         </p>
@@ -155,7 +155,7 @@ function OfflineState({ onRetry }: { onRetry: () => void }) {
             className="w-full py-2.5 px-4 border border-border text-sm text-muted rounded-lg hover:text-gray-300 hover:border-gray-600 transition-colors flex items-center justify-center gap-2"
           >
             <ExternalLink size={14} />
-            Open localhost:3000 in browser
+            Open localhost:3001 in browser
           </a>
         </div>
       </div>
