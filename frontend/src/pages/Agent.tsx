@@ -99,9 +99,9 @@ export function AgentPage() {
           </li>
           <li className="flex gap-3">
             <span className="w-5 h-5 rounded-full bg-accent/20 text-accent text-xs flex items-center justify-center flex-shrink-0 mt-0.5">3</span>
-            <span>Approve the device in the{' '}
+            <span>The script automatically registers this device with the host. Approve it in the{' '}
               <Link to="/devices" className="text-accent hover:underline">Devices</Link>{' '}
-              tab (it will appear automatically via mDNS).
+              tab.
             </span>
           </li>
           <li className="flex gap-3">
@@ -177,12 +177,12 @@ export function AgentPage() {
             <p className="text-xs text-muted">
               Download pre-built binaries:{' '}
               <a
-                href="https://github.com/ggerganov/llama.cpp/releases"
+                href="https://github.com/ggml-org/llama.cpp/releases"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-accent hover:underline"
               >
-                github.com/ggerganov/llama.cpp/releases
+                github.com/ggml-org/llama.cpp/releases
               </a>
             </p>
           </div>

@@ -107,11 +107,11 @@ case "$ARCH" in
   *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-# Get latest llama.cpp release
+# Get latest llama.cpp release (repo moved to ggml-org)
 echo "[SharedLLM] Fetching latest llama.cpp release info..."
-LATEST_TAG=$(curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+LATEST_TAG=$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 
-DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/$LATEST_TAG/llama-$LATEST_TAG-bin-ubuntu-$LLAMA_ARCH.zip"
+DOWNLOAD_URL="https://github.com/ggml-org/llama.cpp/releases/download/$LATEST_TAG/llama-$LATEST_TAG-bin-ubuntu-$LLAMA_ARCH.zip"
 
 mkdir -p "$INSTALL_DIR"
 TMPDIR=$(mktemp -d)
@@ -120,15 +120,23 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "[SharedLLM] Downloading llama.cpp $LATEST_TAG..."
 curl -fsSL -o "$TMPDIR/llama.zip" "$DOWNLOAD_URL" || {{
   echo "[SharedLLM] Download failed. Please install llama.cpp manually."
-  echo "  https://github.com/ggerganov/llama.cpp/releases"
+  echo "  https://github.com/ggml-org/llama.cpp/releases"
   exit 1
 }}
 
 cd "$TMPDIR"
 unzip -q llama.zip
-find . -name "llama-rpc-server" -exec cp {{}} "$INSTALL_DIR/" \;
+
+# Binary may be named 'rpc-server' in recent releases or 'llama-rpc-server' in older ones
+RPC_BIN=$(find . -name "rpc-server" -o -name "llama-rpc-server" 2>/dev/null | head -1)
+if [ -z "$RPC_BIN" ]; then
+  echo "[SharedLLM] Could not find rpc-server binary in archive."
+  exit 1
+fi
+cp "$RPC_BIN" "$INSTALL_DIR/llama-rpc-server"
 chmod +x "$INSTALL_DIR/llama-rpc-server"
 
+mkdir -p "$HOME/.sharedmem"
 echo "[SharedLLM] Starting llama-rpc-server on port $RPC_PORT..."
 nohup "$INSTALL_DIR/llama-rpc-server" --host 0.0.0.0 --port "$RPC_PORT" > "$HOME/.sharedmem/rpc-server.log" 2>&1 &
 echo $! > "$HOME/.sharedmem/rpc-server.pid"
@@ -139,7 +147,21 @@ echo "  Listening: 0.0.0.0:$RPC_PORT"
 echo "  Log:       $HOME/.sharedmem/rpc-server.log"
 echo "  PID file:  $HOME/.sharedmem/rpc-server.pid"
 echo ""
-echo "  Now go to http://{host_ip}:{dashboard_port} and start inference."
+
+# Self-register with the host dashboard
+MY_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+' || hostname -I 2>/dev/null | awk '{{print $1}}' || echo "")
+MY_NAME=$(hostname)
+if [ -n "$MY_IP" ]; then
+  echo "[SharedLLM] Registering with host at {host_ip}:{dashboard_port}..."
+  curl -fsSL -X POST "http://{host_ip}:{dashboard_port}/api/devices" \
+    -H "Content-Type: application/json" \
+    -d "{{\"name\": \"$MY_NAME\", \"ip\": \"$MY_IP\"}}" \
+    -o /dev/null 2>/dev/null \
+    && echo "[SharedLLM] Registered! Go to http://{host_ip}:{dashboard_port}/devices to approve this device." \
+    || echo "[SharedLLM] Could not auto-register. Add manually at http://{host_ip}:{dashboard_port}/devices (Name=$MY_NAME, IP=$MY_IP)"
+else
+  echo "[SharedLLM] Could not detect local IP. Add this device manually at http://{host_ip}:{dashboard_port}/devices"
+fi
 "#,
         host_ip = host_ip,
         dashboard_port = dashboard_port,
@@ -169,8 +191,8 @@ else
   echo "[SharedLLM] Homebrew not found. Downloading pre-built binary..."
   ARCH=$(uname -m)
   mkdir -p "$INSTALL_DIR"
-  LATEST_TAG=$(curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-  DOWNLOAD_URL="https://github.com/ggerganov/llama.cpp/releases/download/$LATEST_TAG/llama-$LATEST_TAG-bin-macos-$ARCH.zip"
+  LATEST_TAG=$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  DOWNLOAD_URL="https://github.com/ggml-org/llama.cpp/releases/download/$LATEST_TAG/llama-$LATEST_TAG-bin-macos-$ARCH.zip"
 
   TMPDIR=$(mktemp -d)
   trap 'rm -rf "$TMPDIR"' EXIT
@@ -179,7 +201,13 @@ else
     exit 1
   }}
   cd "$TMPDIR" && unzip -q llama.zip
-  find . -name "llama-rpc-server" -exec cp {{}} "$INSTALL_DIR/" \;
+  # Binary may be named 'rpc-server' in recent releases or 'llama-rpc-server' in older ones
+  RPC_BIN=$(find . -name "rpc-server" -o -name "llama-rpc-server" 2>/dev/null | head -1)
+  if [ -z "$RPC_BIN" ]; then
+    echo "[SharedLLM] Could not find rpc-server binary in archive."
+    exit 1
+  fi
+  cp "$RPC_BIN" "$INSTALL_DIR/llama-rpc-server"
   chmod +x "$INSTALL_DIR/llama-rpc-server"
   LLAMA_RPC="$INSTALL_DIR/llama-rpc-server"
 fi
@@ -194,6 +222,22 @@ echo ""
 echo "[SharedLLM] RPC agent started!"
 echo "  Listening: 0.0.0.0:$RPC_PORT"
 echo "  Dashboard: http://{host_ip}:{dashboard_port}"
+echo ""
+
+# Self-register with the host dashboard
+MY_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || ifconfig 2>/dev/null | grep 'inet ' | grep -v 127.0.0.1 | awk '{{print $2}}' | head -1 || echo "")
+MY_NAME=$(hostname)
+if [ -n "$MY_IP" ]; then
+  echo "[SharedLLM] Registering with host at {host_ip}:{dashboard_port}..."
+  curl -fsSL -X POST "http://{host_ip}:{dashboard_port}/api/devices" \
+    -H "Content-Type: application/json" \
+    -d "{{\"name\": \"$MY_NAME\", \"ip\": \"$MY_IP\"}}" \
+    -o /dev/null 2>/dev/null \
+    && echo "[SharedLLM] Registered! Go to http://{host_ip}:{dashboard_port}/devices to approve this device." \
+    || echo "[SharedLLM] Could not auto-register. Add manually at http://{host_ip}:{dashboard_port}/devices (Name=$MY_NAME, IP=$MY_IP)"
+else
+  echo "[SharedLLM] Could not detect local IP. Add this device manually at http://{host_ip}:{dashboard_port}/devices"
+fi
 "#,
         host_ip = host_ip,
         dashboard_port = dashboard_port,
@@ -216,18 +260,35 @@ Write-Host "[SharedLLM] Installing RPC agent for Windows..."
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.sharedmem" | Out-Null
 
-# Get latest release
-$Release = Invoke-RestMethod "https://api.github.com/repos/ggerganov/llama.cpp/releases/latest"
+# Get latest release (repo moved to ggml-org)
+$Release = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
 $Tag = $Release.tag_name
-$DownloadUrl = "https://github.com/ggerganov/llama.cpp/releases/download/$Tag/llama-$Tag-bin-win-avx2-x64.zip"
+
+# Try avx2 first, fall back to cpu (older assets used avx2-x64, newer use cpu-x64)
+$DownloadUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$Tag/llama-$Tag-bin-win-avx2-x64.zip"
+$TmpZip = "$env:TEMP\llama-cpp.zip"
 
 Write-Host "[SharedLLM] Downloading llama.cpp $Tag..."
-$TmpZip = "$env:TEMP\llama-cpp.zip"
-Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpZip
+try {{
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpZip -ErrorAction Stop
+}} catch {{
+    $DownloadUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$Tag/llama-$Tag-bin-win-cpu-x64.zip"
+    Write-Host "[SharedLLM] avx2 build not found, trying cpu build..."
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TmpZip
+}}
 
 $TmpDir = "$env:TEMP\llama-cpp-extract"
 Expand-Archive -Path $TmpZip -DestinationPath $TmpDir -Force
-$RpcBin = Get-ChildItem -Path $TmpDir -Recurse -Filter "llama-rpc-server.exe" | Select-Object -First 1
+
+# Binary may be named 'rpc-server.exe' in recent releases or 'llama-rpc-server.exe' in older ones
+$RpcBin = Get-ChildItem -Path $TmpDir -Recurse -Filter "rpc-server.exe" | Select-Object -First 1
+if (-not $RpcBin) {{
+    $RpcBin = Get-ChildItem -Path $TmpDir -Recurse -Filter "llama-rpc-server.exe" | Select-Object -First 1
+}}
+if (-not $RpcBin) {{
+    Write-Host "[SharedLLM] Could not find rpc-server binary in archive. Aborting."
+    exit 1
+}}
 Copy-Item $RpcBin.FullName "$InstallDir\llama-rpc-server.exe"
 
 Write-Host "[SharedLLM] Starting llama-rpc-server on port $RpcPort..."
@@ -240,6 +301,23 @@ Write-Host ""
 Write-Host "[SharedLLM] RPC agent started!"
 Write-Host "  Listening: 0.0.0.0:$RpcPort"
 Write-Host "  Dashboard: http://{host_ip}:{dashboard_port}"
+Write-Host ""
+
+# Self-register with the host dashboard
+$MyIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {{ $_.IPAddress -notmatch '^127' -and $_.IPAddress -notmatch '^169' }} | Select-Object -First 1).IPAddress
+$MyName = $env:COMPUTERNAME
+if ($MyIp) {{
+    Write-Host "[SharedLLM] Registering with host at {host_ip}:{dashboard_port}..."
+    try {{
+        $Body = '{{\"name\": \"' + $MyName + '\", \"ip\": \"' + $MyIp + '\"}}'
+        Invoke-RestMethod -Uri "http://{host_ip}:{dashboard_port}/api/devices" -Method Post -ContentType "application/json" -Body $Body | Out-Null
+        Write-Host "[SharedLLM] Registered! Go to http://{host_ip}:{dashboard_port}/devices to approve this device."
+    }} catch {{
+        Write-Host "[SharedLLM] Could not auto-register. Add manually at http://{host_ip}:{dashboard_port}/devices (Name=$MyName, IP=$MyIp)"
+    }}
+}} else {{
+    Write-Host "[SharedLLM] Could not detect local IP. Add this device manually at http://{host_ip}:{dashboard_port}/devices"
+}}
 "#,
         host_ip = host_ip,
         dashboard_port = dashboard_port,
