@@ -2,11 +2,11 @@
 # ─────────────────────────────────────────────────────────────────
 #  SharedLLM — start everything with one command
 #    • Rust/Axum backend    → http://localhost:8080
-#    • Open WebUI (Chat)    → http://localhost:3000
 #    • Frontend (built)     → served by backend at :8080
+#    • Open WebUI (Chat)    → auto-started by backend on :3001
 #
 #  Usage:  ./start.sh
-#  Stop:   Ctrl+C  (kills all child processes cleanly)
+#  Stop:   Ctrl+C  (kills backend; Open WebUI is managed by backend)
 # ─────────────────────────────────────────────────────────────────
 
 set -e
@@ -16,15 +16,12 @@ BACKEND="$ROOT/backend"
 FRONTEND="$ROOT/frontend"
 PYTHON="/opt/homebrew/bin/python3.12"
 
-# ── PIDs to clean up on exit ──────────────────────────────────────
 BACKEND_PID=""
-OPENWEBUI_PID=""
 
 cleanup() {
   echo ""
-  echo "Shutting down all services..."
-  [ -n "$BACKEND_PID" ]   && kill "$BACKEND_PID"   2>/dev/null || true
-  [ -n "$OPENWEBUI_PID" ] && kill "$OPENWEBUI_PID" 2>/dev/null || true
+  echo "Shutting down..."
+  [ -n "$BACKEND_PID" ] && kill "$BACKEND_PID" 2>/dev/null || true
   wait 2>/dev/null || true
   echo "Done."
 }
@@ -37,11 +34,11 @@ echo ""
 command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found. Install from https://rustup.rs"; exit 1; }
 command -v node  >/dev/null 2>&1 || { echo "ERROR: node not found. Install from https://nodejs.org";  exit 1; }
 
-SKIP_OPENWEBUI=""
 if [ ! -f "$PYTHON" ]; then
-  echo "WARN: Python 3.12 not found at $PYTHON — Chat/Open WebUI will be skipped."
+  echo "WARN: Python 3.12 not found at $PYTHON"
+  echo "      Chat/Open WebUI will not start automatically."
   echo "      Fix with: brew install python@3.12"
-  SKIP_OPENWEBUI=1
+  echo ""
 fi
 
 # ── Install frontend deps if missing ──────────────────────────────
@@ -61,52 +58,27 @@ echo "[2/3] Building backend..."
 # ── Ensure data directory ─────────────────────────────────────────
 mkdir -p "$BACKEND/data"
 
-# ── Start backend in background ───────────────────────────────────
-echo "[3/3] Starting services..."
+# ── Start backend (it auto-starts Open WebUI internally) ──────────
+echo "[3/3] Starting backend..."
 echo ""
 
 (
   cd "$BACKEND"
-  DATABASE_URL="sqlite:./data/shared_memory.db" ./target/release/server
+  DATABASE_URL="sqlite:./data/shared_memory.db" \
+  OPENWEBUI_DATA_DIR="$ROOT/.openwebui-data" \
+    ./target/release/server
 ) &
 BACKEND_PID=$!
 
-# ── Install & start Open WebUI in background ─────────────────────
-if [ -z "$SKIP_OPENWEBUI" ]; then
-  # Install open-webui automatically on first run
-  if ! "$PYTHON" -c "import open_webui" 2>/dev/null; then
-    echo "  Installing Open WebUI (first run only, this may take a minute)..."
-    "$PYTHON" -m pip install open-webui --break-system-packages -q
-  fi
-
-  export PORT=3001
-  export HOST="0.0.0.0"
-  export OPENAI_API_BASE_URL="http://localhost:8080/v1"
-  export OPENAI_API_KEY="sk-sharedllm"
-  export WEBUI_AUTH="False"
-  export CORS_ALLOW_ORIGIN="*"
-  export DATA_DIR="$ROOT/.openwebui-data"
-  mkdir -p "$DATA_DIR"
-
-  "$PYTHON" -m open_webui serve --host "$HOST" --port "$PORT" \
-    > /tmp/openwebui.log 2>&1 &
-  OPENWEBUI_PID=$!
-fi
-
-# ── Brief pause for services to bind ─────────────────────────────
 sleep 2
 
 echo "  Backend      →  http://localhost:8080"
-  echo "  Chat (WebUI) →  http://localhost:3001"
+echo "  Chat (WebUI) →  http://localhost:3001  (starting in background)"
 echo "  API          →  http://localhost:8080/api"
 echo "  WebSocket    →  ws://localhost:8080/ws"
+echo "  Open WebUI log: /tmp/openwebui.log"
 echo ""
-if [ -n "$OPENWEBUI_PID" ]; then
-  echo "  Open WebUI log: /tmp/openwebui.log"
-fi
-echo ""
-echo "  Press Ctrl+C to stop everything."
+echo "  Press Ctrl+C to stop."
 echo ""
 
-# ── Keep running until backend exits (or Ctrl+C) ─────────────────
 wait $BACKEND_PID || true

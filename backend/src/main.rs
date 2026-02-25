@@ -26,6 +26,69 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::ws::WsEvent;
 
+// ─── Open WebUI auto-start ────────────────────────────────────────────────────
+
+async fn maybe_start_open_webui() {
+    const PORT: u16 = 3001;
+    const PYTHON: &str = "/opt/homebrew/bin/python3.12";
+
+    // If something is already bound on the port, do nothing.
+    if tokio::net::TcpStream::connect(("127.0.0.1", PORT)).await.is_ok() {
+        tracing::info!("Open WebUI already running on port {}", PORT);
+        return;
+    }
+
+    if !std::path::Path::new(PYTHON).exists() {
+        tracing::warn!("Python 3.12 not found at {} — skipping Open WebUI auto-start", PYTHON);
+        return;
+    }
+
+    // Resolve project root: binary is at <root>/backend/target/release/server
+    let data_dir = std::env::var("OPENWEBUI_DATA_DIR").unwrap_or_else(|_| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| {
+                // .../backend/target/release/server → go up 4 levels → project root
+                p.ancestors().nth(4).map(|r| r.join(".openwebui-data").to_string_lossy().to_string())
+            })
+            .unwrap_or_else(|| "/tmp/.openwebui-data".to_string())
+    });
+
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        tracing::warn!("Could not create Open WebUI data dir {}: {}", data_dir, e);
+    }
+
+    tracing::info!("Starting Open WebUI on port {} (data dir: {})", PORT, data_dir);
+
+    // Use sh to redirect both stdout and stderr to the log file
+    let script = format!(
+        r#"exec {python} -m open_webui serve --host 0.0.0.0 --port {port} >> /tmp/openwebui.log 2>&1"#,
+        python = PYTHON,
+        port = PORT,
+    );
+
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", &script])
+        .env("OPENAI_API_BASE_URL", "http://localhost:8080/v1")
+        .env("OPENAI_API_KEY", "sk-sharedllm")
+        .env("WEBUI_AUTH", "False")
+        .env("CORS_ALLOW_ORIGIN", "*")
+        .env("DATA_DIR", &data_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    match cmd.spawn() {
+        Ok(child) => {
+            tracing::info!("Open WebUI spawned (pid {:?}), log: /tmp/openwebui.log", child.id());
+            drop(child);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to spawn Open WebUI: {}", e);
+        }
+    }
+}
+
 // ─── App State ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -110,6 +173,9 @@ async fn main() -> Result<()> {
         ollama.clone().spawn_watchdog();
     }
 
+    // Auto-start Open WebUI (non-blocking — it will take ~30s to warm up)
+    tokio::spawn(maybe_start_open_webui());
+
     // mDNS: advertise this host
     let _mdns_daemon = discovery::advertise().ok();
 
@@ -178,6 +244,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn openwebui_status_handler() -> axum::Json<serde_json::Value> {
+    let running = tokio::net::TcpStream::connect("127.0.0.1:3001").await.is_ok();
+    axum::Json(serde_json::json!({ "running": running }))
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -227,6 +298,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         // OpenAI-compatible API proxy → llama-server (used by Open WebUI)
         .route("/v1/models", get(api::cluster::models_proxy))
         .route("/v1/chat/completions", post(api::cluster::chat_completions_proxy))
+        // Open WebUI status (TCP probe)
+        .route("/api/openwebui/status", get(openwebui_status_handler))
         // Agent install scripts
         .route("/agent/install", get(api::agent::install_script))
         .route("/agent/info", get(api::agent::agent_info))
