@@ -439,9 +439,10 @@ function BackendSelector({ activeConfig, onActivated }: BackendSelectorProps) {
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
-function ChatPanel({ inferenceRunning, activeConfig }: {
+function ChatPanel({ inferenceRunning, activeConfig, ollamaRunning }: {
   inferenceRunning: boolean
   activeConfig: BackendConfig | null
+  ollamaRunning: boolean
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
@@ -505,11 +506,18 @@ function ChatPanel({ inferenceRunning, activeConfig }: {
     }
   }
 
-  const placeholder = chatReady
-    ? 'Type a message...'
-    : inferenceRunning === false && !externalBackendReady
-    ? 'Start llama.cpp inference or activate an external backend'
-    : 'Start inference to chat'
+  function getPlaceholder() {
+    if (chatReady) return 'Type a message...'
+    if (ollamaRunning && activeConfig?.backend_type !== 'ollama') {
+      return 'Ollama detected — select the Ollama tab above and click Activate'
+    }
+    if (ollamaRunning) {
+      return 'Ollama is running — click Activate in the Ollama tab to enable chat'
+    }
+    return 'Start llama.cpp inference or activate an external backend'
+  }
+
+  const placeholder = getPlaceholder()
 
   return (
     <div className="card flex flex-col h-[500px]">
@@ -584,16 +592,19 @@ export function InferencePage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [activeBackend, setActiveBackend] = useState<BackendConfig | null>(null)
+  const [ollamaRunning, setOllamaRunning] = useState(false)
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [data, cfg] = await Promise.all([
+      const [data, cfg, ollamaStatus] = await Promise.all([
         api.clusterStatus(),
         api.backendConfig().catch(() => null),
+        api.ollamaStatus().catch(() => null),
       ])
       setClusterStatus(data)
       if (cfg) setActiveBackend(cfg)
+      setOllamaRunning(ollamaStatus?.running === true)
     } catch (e: unknown) {
       console.error('Failed to fetch cluster status', e)
     } finally {
@@ -606,6 +617,11 @@ export function InferencePage() {
     const id = setInterval(refresh, 5000)
     return () => clearInterval(id)
   }, [refresh])
+
+  // Clear stale action errors whenever the model path changes
+  useEffect(() => {
+    setActionError(null)
+  }, [modelPath])
 
   const session: InferenceSessionInfo | undefined = clusterStatus?.current_session
   const inferenceRunning = clusterStatus?.llama_cpp.inference_running ?? false
@@ -983,7 +999,7 @@ export function InferencePage() {
 
         {/* Right: chat */}
         <div>
-          <ChatPanel inferenceRunning={inferenceRunning} activeConfig={activeBackend} />
+          <ChatPanel inferenceRunning={inferenceRunning} activeConfig={activeBackend} ollamaRunning={ollamaRunning} />
 
           {/* Inference server info */}
           {inferenceRunning && (
