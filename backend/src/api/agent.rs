@@ -186,7 +186,13 @@ echo "[SharedLLM] Installing RPC agent for macOS..."
 if command -v brew &>/dev/null; then
   echo "[SharedLLM] Installing llama.cpp via Homebrew..."
   brew install llama.cpp
-  LLAMA_RPC=$(which llama-rpc-server 2>/dev/null || echo "")
+  # Newer Homebrew may install as 'rpc-server', older as 'llama-rpc-server'
+  LLAMA_RPC=$(which llama-rpc-server 2>/dev/null || which rpc-server 2>/dev/null || echo "")
+  if [ -z "$LLAMA_RPC" ]; then
+    echo "[SharedLLM] ERROR: Could not find llama-rpc-server or rpc-server in PATH after brew install."
+    echo "  Try: brew reinstall llama.cpp"
+    exit 1
+  fi
 else
   echo "[SharedLLM] Homebrew not found. Downloading pre-built binary..."
   ARCH=$(uname -m)
@@ -201,6 +207,10 @@ else
     exit 1
   }}
   cd "$TMPDIR" && unzip -q llama.zip
+
+  # Remove macOS Gatekeeper quarantine flag — required or macOS will silently block the binary
+  xattr -dr com.apple.quarantine . 2>/dev/null || true
+
   # Binary may be named 'rpc-server' in recent releases or 'llama-rpc-server' in older ones
   RPC_BIN=$(find . -name "rpc-server" -o -name "llama-rpc-server" 2>/dev/null | head -1)
   if [ -z "$RPC_BIN" ]; then
@@ -209,20 +219,42 @@ else
   fi
   cp "$RPC_BIN" "$INSTALL_DIR/llama-rpc-server"
   chmod +x "$INSTALL_DIR/llama-rpc-server"
+  # Clear quarantine on the installed copy too
+  xattr -d com.apple.quarantine "$INSTALL_DIR/llama-rpc-server" 2>/dev/null || true
   LLAMA_RPC="$INSTALL_DIR/llama-rpc-server"
 fi
 
 mkdir -p "$HOME/.sharedmem"
 echo "[SharedLLM] Starting llama-rpc-server on port $RPC_PORT..."
-nohup "${{LLAMA_RPC:-llama-rpc-server}}" --host 0.0.0.0 --port "$RPC_PORT" \
+nohup "${{LLAMA_RPC}}" --host 0.0.0.0 --port "$RPC_PORT" \
   > "$HOME/.sharedmem/rpc-server.log" 2>&1 &
-echo $! > "$HOME/.sharedmem/rpc-server.pid"
+RPC_PID=$!
+echo "$RPC_PID" > "$HOME/.sharedmem/rpc-server.pid"
 
-echo ""
-echo "[SharedLLM] RPC agent started!"
-echo "  Listening: 0.0.0.0:$RPC_PORT"
-echo "  Dashboard: http://{host_ip}:{dashboard_port}"
-echo ""
+# Verify the process actually started (Gatekeeper or a missing dependency can kill it immediately)
+sleep 2
+if kill -0 "$RPC_PID" 2>/dev/null; then
+  echo ""
+  echo "[SharedLLM] RPC agent running (PID: $RPC_PID)"
+  echo "  Listening: 0.0.0.0:$RPC_PORT"
+  echo "  Log:       $HOME/.sharedmem/rpc-server.log"
+  echo ""
+  echo "  FIREWALL NOTE: If this Mac's firewall is on, allow incoming connections on port $RPC_PORT:"
+  echo "  System Settings → Network → Firewall → Options → add '${{LLAMA_RPC}}'"
+  echo ""
+else
+  echo ""
+  echo "[SharedLLM] ERROR: Process exited immediately after launch."
+  echo "  Last log output:"
+  cat "$HOME/.sharedmem/rpc-server.log" 2>/dev/null | tail -10 || echo "  (log empty)"
+  echo ""
+  echo "  Common causes on macOS:"
+  echo "  1. Gatekeeper blocked the binary — go to System Settings → Privacy & Security"
+  echo "     and click 'Allow Anyway' next to the llama-rpc-server message."
+  echo "  2. Missing dependency — try: brew install llama.cpp"
+  echo ""
+  exit 1
+fi
 
 # Self-register with the host dashboard
 MY_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || ifconfig 2>/dev/null | grep 'inet ' | grep -v 127.0.0.1 | awk '{{print $2}}' | head -1 || echo "")

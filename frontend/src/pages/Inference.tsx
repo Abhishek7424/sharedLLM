@@ -884,7 +884,8 @@ export function InferencePage() {
                     <label
                       key={device.id}
                       className={clsx(
-                        'flex items-center gap-3 p-2 rounded-lg border cursor-pointer transition-colors',
+                        'flex items-center gap-3 p-2 rounded-lg border transition-colors',
+                        ready ? 'cursor-pointer' : 'cursor-default opacity-60',
                         selectedDeviceIds.includes(device.id)
                           ? 'border-accent/40 bg-accent/5'
                           : 'border-border hover:border-border/80'
@@ -893,8 +894,8 @@ export function InferencePage() {
                       <input
                         type="checkbox"
                         checked={selectedDeviceIds.includes(device.id)}
-                        onChange={() => toggleDevice(device.id)}
-                        disabled={inferenceRunning}
+                        onChange={() => ready && !inferenceRunning && toggleDevice(device.id)}
+                        disabled={inferenceRunning || !ready}
                         className="accent-accent"
                       />
                       <div className="flex-1 min-w-0">
@@ -910,6 +911,11 @@ export function InferencePage() {
                         {device.memory_total_mb > 0 && (
                           <p className="text-xs text-muted mt-0.5 ml-5">
                             {fmt(device.memory_free_mb)} free / {fmt(device.memory_total_mb)} total
+                          </p>
+                        )}
+                        {!ready && (
+                          <p className="text-xs text-warning mt-0.5 ml-5">
+                            RPC unreachable — is llama-rpc-server running on this device?
                           </p>
                         )}
                       </div>
