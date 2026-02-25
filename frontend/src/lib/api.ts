@@ -94,11 +94,27 @@ export const api = {
     fetch(`${API_BASE}/api/cluster/status`).then(checkOk).then(r => r.json()),
   inferenceStatus: () =>
     fetch(`${API_BASE}/api/cluster/inference/status`).then(checkOk).then(r => r.json()),
-  startInference: (model_path: string, device_ids: string[]) =>
+  /**
+   * Check how a model fits into the available local + cluster memory.
+   * Returns a ModelCheckResult with fit status, recommended settings, and warnings.
+   */
+  modelCheck: (path: string, deviceIds: string[]) => {
+    const params = new URLSearchParams({ path })
+    if (deviceIds.length > 0) params.set('device_ids', deviceIds.join(','))
+    return fetch(`${API_BASE}/api/cluster/model-check?${params}`)
+      .then(checkOk)
+      .then(r => r.json())
+  },
+  startInference: (
+    model_path: string,
+    device_ids: string[],
+    n_gpu_layers?: number,
+    ctx_size?: number,
+  ) =>
     fetch(`${API_BASE}/api/cluster/inference/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_path, device_ids }),
+      body: JSON.stringify({ model_path, device_ids, n_gpu_layers, ctx_size }),
     }).then(checkOk).then(r => r.json()),
   stopInference: () =>
     fetch(`${API_BASE}/api/cluster/inference/stop`, { method: 'POST' }).then(checkOk).then(r => r.json()),

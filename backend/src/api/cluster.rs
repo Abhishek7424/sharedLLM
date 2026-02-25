@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -21,6 +21,18 @@ pub struct StartInferenceRequest {
     pub model_path: String,
     /// Device IDs from the DB whose RPC servers should be included
     pub device_ids: Vec<String>,
+    /// Number of layers to put on GPU. -1 = all (default), 0 = CPU only.
+    pub n_gpu_layers: Option<i32>,
+    /// Context window size in tokens (default 4096).
+    pub ctx_size: Option<u32>,
+}
+
+/// Query params for GET /api/cluster/model-check
+#[derive(Deserialize)]
+pub struct ModelCheckParams {
+    pub path: String,
+    /// Comma-separated device IDs to include in the memory pool.
+    pub device_ids: Option<String>,
 }
 
 // ─── GET /api/cluster/status ──────────────────────────────────────────────────
@@ -60,25 +72,47 @@ pub async fn cluster_status(State(state): State<Arc<AppState>>) -> impl IntoResp
 
     let llama_cpp = state.llama_cpp.clone();
     let pool = state.pool.clone();
+    let http_client = state.llama_cpp.client.clone();
+
     let probe_futs = probe_data.into_iter().map(
-        |(id, name, ip, rpc_port, rpc_status, memory_total_mb, memory_free_mb)| {
+        move |(id, name, ip, rpc_port, rpc_status, memory_total_mb, memory_free_mb)| {
             let mgr = llama_cpp.clone();
             let pool = pool.clone();
             let ip_clone = ip.clone();
             let id_clone = id.clone();
+            let client = http_client.clone();
             async move {
                 let reachable = mgr.probe_rpc_device(&ip_clone, rpc_port as u16).await;
-                let live_status = if reachable { "ready" } else { rpc_status.as_str() };
+                let live_status: String = if reachable {
+                    "ready".to_string()
+                } else {
+                    rpc_status.clone()
+                };
                 // Persist live probe result to DB so other pages see consistent status
-                let _ = queries::update_device_rpc_status(&pool, &id_clone, live_status).await;
+                let _ = queries::update_device_rpc_status(&pool, &id_clone, &live_status).await;
+
+                // When reachable, fetch real memory stats from the remote device
+                let (mem_total, mem_free) = if reachable {
+                    match fetch_remote_memory(&client, &ip_clone).await {
+                        Some((t, f)) => {
+                            let _ = queries::update_device_memory_stats(&pool, &id_clone, t, f)
+                                .await;
+                            (t, f)
+                        }
+                        None => (memory_total_mb, memory_free_mb),
+                    }
+                } else {
+                    (memory_total_mb, memory_free_mb)
+                };
+
                 serde_json::json!({
                     "id": id,
                     "name": name,
                     "ip": ip,
                     "rpc_port": rpc_port,
                     "rpc_status": live_status,
-                    "memory_total_mb": memory_total_mb,
-                    "memory_free_mb": memory_free_mb,
+                    "memory_total_mb": mem_total,
+                    "memory_free_mb": mem_free,
                 })
             }
         },
@@ -100,6 +134,38 @@ pub async fn cluster_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         "current_session": llama_status.current_session,
     }))
     .into_response()
+}
+
+/// Fetch total and free memory from a remote device's /api/gpu endpoint.
+/// Returns `None` if the request fails or the device reports no memory.
+async fn fetch_remote_memory(client: &reqwest::Client, ip: &str) -> Option<(i64, i64)> {
+    let url = format!("http://{}:8080/api/gpu", ip);
+    let data: serde_json::Value = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+
+    let providers = data["providers"].as_array()?;
+    if providers.is_empty() {
+        return None;
+    }
+    let total: i64 = providers
+        .iter()
+        .filter_map(|p| p["total_mb"].as_i64())
+        .sum();
+    let free: i64 = providers
+        .iter()
+        .filter_map(|p| p["free_mb"].as_i64())
+        .sum();
+    if total == 0 {
+        return None;
+    }
+    Some((total, free))
 }
 
 // ─── POST /api/cluster/inference/start ───────────────────────────────────────
@@ -135,7 +201,12 @@ pub async fn start_inference(
 
     match state
         .llama_cpp
-        .start_inference(&req.model_path, rpc_addresses)
+        .start_inference(
+            &req.model_path,
+            rpc_addresses,
+            req.n_gpu_layers.unwrap_or(-1),
+            req.ctx_size.unwrap_or(4096),
+        )
         .await
     {
         Ok(()) => {
@@ -178,6 +249,50 @@ pub async fn inference_status(State(state): State<Arc<AppState>>) -> impl IntoRe
         "inference_port": status.inference_port,
     }))
     .into_response()
+}
+
+// ─── GET /api/cluster/model-check ────────────────────────────────────────────
+
+pub async fn model_check(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ModelCheckParams>,
+) -> impl IntoResponse {
+    // Get local free memory across all providers
+    let snapshots = crate::memory::aggregate_snapshot_async(&state.providers).await;
+    let local_free_mb: u64 = snapshots.iter().map(|s| s.free_mb).sum();
+
+    // Collect free memory from selected (or all approved) cluster devices
+    let device_free_mbs: Vec<u64> = if let Some(ids_str) = &params.device_ids {
+        let ids: Vec<&str> = ids_str
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut mbs = Vec::new();
+        for id in ids {
+            if let Ok(Some(device)) = queries::get_device(&state.pool, id).await {
+                if device.memory_free_mb > 0 {
+                    mbs.push(device.memory_free_mb as u64);
+                }
+            }
+        }
+        mbs
+    } else {
+        vec![]
+    };
+
+    match crate::llama_cpp::LlamaCppManager::analyze_model(
+        &params.path,
+        local_free_mb,
+        device_free_mbs,
+    ) {
+        Ok(analysis) => Json(serde_json::to_value(analysis).unwrap_or_default()).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 // ─── POST /api/cluster/rpc/start ─────────────────────────────────────────────

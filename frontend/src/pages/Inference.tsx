@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download, Check, ChevronDown } from 'lucide-react'
+import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download, Check, ChevronDown, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
-import type { BackendConfig, BackendType, ClusterStatus, ChatMessage, InferenceSessionInfo } from '../types'
+import type { BackendConfig, BackendType, ClusterStatus, ChatMessage, InferenceSessionInfo, ModelCheckResult, FitStatus } from '../types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,6 +23,185 @@ function StatusDot({ ok }: { ok: boolean }) {
 }
 
 // ─── Backend tab labels ───────────────────────────────────────────────────────
+
+// ─── ModelGuardrails ──────────────────────────────────────────────────────────
+
+const FIT_META: Record<FitStatus, { label: string; badgeCls: string; barCls: string }> = {
+  fits_locally:      { label: 'Fits in Local Memory',    badgeCls: 'bg-success/15 text-success',  barCls: 'bg-success/50' },
+  fits_distributed:  { label: 'Fits Across Cluster',     badgeCls: 'bg-accent/15 text-accent',    barCls: 'bg-accent/50' },
+  partial_gpu:       { label: 'Partial GPU',              badgeCls: 'bg-warning/15 text-warning',  barCls: 'bg-warning/50' },
+  too_large:         { label: 'Too Large for Cluster',    badgeCls: 'bg-danger/15 text-danger',    barCls: 'bg-danger/50' },
+}
+
+interface ModelGuardrailsProps {
+  modelPath: string
+  selectedDeviceIds: string[]
+  disabled: boolean
+  onSettingsChange: (s: { n_gpu_layers: number; ctx_size: number }) => void
+}
+
+function ModelGuardrails({ modelPath, selectedDeviceIds, disabled, onSettingsChange }: ModelGuardrailsProps) {
+  const [analysis, setAnalysis] = useState<ModelCheckResult | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [nGpuLayers, setNGpuLayers] = useState(-1)
+  const [ctxSize, setCtxSize] = useState(4096)
+
+  // Debounced fetch whenever model path or selected devices change
+  useEffect(() => {
+    if (!modelPath.trim()) {
+      setAnalysis(null)
+      setCheckError(null)
+      return
+    }
+    const timer = setTimeout(async () => {
+      setChecking(true)
+      setCheckError(null)
+      try {
+        const result: ModelCheckResult = await api.modelCheck(modelPath.trim(), selectedDeviceIds)
+        setAnalysis(result)
+        setNGpuLayers(result.recommended_n_gpu_layers)
+        setCtxSize(result.recommended_ctx_size)
+        onSettingsChange({ n_gpu_layers: result.recommended_n_gpu_layers, ctx_size: result.recommended_ctx_size })
+      } catch (e: unknown) {
+        setCheckError(e instanceof Error ? e.message : String(e))
+        setAnalysis(null)
+      } finally {
+        setChecking(false)
+      }
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [modelPath, selectedDeviceIds, onSettingsChange])
+
+  if (!modelPath.trim()) return null
+
+  if (checking) {
+    return (
+      <div className="card flex items-center gap-2 text-xs text-muted py-3">
+        <Loader2 size={13} className="animate-spin" />
+        Analysing model memory requirements...
+      </div>
+    )
+  }
+
+  if (checkError) {
+    return (
+      <div className="card flex items-center gap-2 text-xs text-muted py-3">
+        <AlertTriangle size={13} className="text-warning flex-shrink-0" />
+        {checkError}
+      </div>
+    )
+  }
+
+  if (!analysis) return null
+
+  const meta = FIT_META[analysis.fit_status]
+  const maxMb = Math.max(analysis.total_available_mb, analysis.model_size_mb, 1)
+  const modelPct = Math.min(100, (analysis.model_size_mb / maxMb) * 100)
+
+  function updateLayers(v: number) {
+    setNGpuLayers(v)
+    onSettingsChange({ n_gpu_layers: v, ctx_size: ctxSize })
+  }
+  function updateCtx(v: number) {
+    setCtxSize(v)
+    onSettingsChange({ n_gpu_layers: nGpuLayers, ctx_size: v })
+  }
+
+  return (
+    <div className="card space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-300">Memory Analysis</h3>
+        <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', meta.badgeCls)}>
+          {meta.label}
+        </span>
+      </div>
+
+      {/* Memory bar */}
+      <div>
+        <div className="flex items-center justify-between text-xs text-muted mb-1.5">
+          <span>Model: {fmt(analysis.model_size_mb)}</span>
+          <span>Available: {fmt(analysis.total_available_mb)}</span>
+        </div>
+        <div className="h-2.5 bg-surface rounded-full overflow-hidden">
+          <div
+            className={clsx('h-full rounded-full transition-all duration-500', meta.barCls)}
+            style={{ width: `${modelPct}%` }}
+          />
+        </div>
+        <div className="flex items-center gap-4 mt-1.5 text-xs text-muted">
+          <span>~{analysis.estimated_layers} layers</span>
+          <span>Local free: {fmt(analysis.local_free_mb)}</span>
+          {analysis.cluster_free_mb > 0 && (
+            <span>Cluster: {fmt(analysis.cluster_free_mb)}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Warnings */}
+      {analysis.warnings.length > 0 && (
+        <div className="space-y-1">
+          {analysis.warnings.map((w, i) => (
+            <div key={i} className="flex items-start gap-1.5 text-xs text-warning">
+              <AlertTriangle size={11} className="flex-shrink-0 mt-0.5" />
+              {w}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* GPU Layers slider */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-xs text-muted">GPU Layers</label>
+          <span className="text-xs text-gray-300 font-mono">
+            {nGpuLayers === -1
+              ? `All (${analysis.estimated_layers})`
+              : nGpuLayers === 0
+              ? 'CPU only'
+              : nGpuLayers}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={-1}
+          max={analysis.estimated_layers}
+          value={nGpuLayers}
+          onChange={e => updateLayers(Number(e.target.value))}
+          disabled={disabled}
+          className="w-full accent-accent disabled:opacity-40"
+        />
+        <div className="flex justify-between text-xs text-muted mt-0.5">
+          <span>CPU only</span>
+          <span>All GPU</span>
+        </div>
+      </div>
+
+      {/* Context size selector */}
+      <div>
+        <label className="block text-xs text-muted mb-1.5">Context Size</label>
+        <div className="flex gap-1.5">
+          {[2048, 4096, 8192, 16384].map(size => (
+            <button
+              key={size}
+              onClick={() => updateCtx(size)}
+              disabled={disabled}
+              className={clsx(
+                'flex-1 py-1 text-xs rounded-lg font-mono transition-colors disabled:opacity-40',
+                ctxSize === size
+                  ? 'bg-accent text-white'
+                  : 'bg-surface text-muted border border-border hover:border-accent/50'
+              )}
+            >
+              {size >= 1024 ? `${size / 1024}K` : size}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const BACKEND_TABS: { type: BackendType; label: string; defaultUrl: string }[] = [
   { type: 'llamacpp', label: 'llama.cpp', defaultUrl: '' },
@@ -400,6 +579,7 @@ export function InferencePage() {
   const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null)
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
   const [modelPath, setModelPath] = useState('')
+  const [inferenceSettings, setInferenceSettings] = useState({ n_gpu_layers: -1, ctx_size: 4096 })
   const [loading, setLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -440,7 +620,12 @@ export function InferencePage() {
     setLoading(true)
     setActionError(null)
     try {
-      await api.startInference(modelPath.trim(), selectedDeviceIds)
+      await api.startInference(
+        modelPath.trim(),
+        selectedDeviceIds,
+        inferenceSettings.n_gpu_layers,
+        inferenceSettings.ctx_size,
+      )
       // Auto-activate llamacpp backend when inference starts
       const cfg: BackendConfig = { backend_type: 'llamacpp', url: '', model: modelPath.trim() }
       await api.setBackendConfig(cfg)
@@ -742,6 +927,14 @@ export function InferencePage() {
               </div>
             )}
           </div>
+
+          {/* Model memory guardrails — auto-fetched when model path is set */}
+          <ModelGuardrails
+            modelPath={modelPath}
+            selectedDeviceIds={selectedDeviceIds}
+            disabled={inferenceRunning}
+            onSettingsChange={setInferenceSettings}
+          />
 
           {/* Start/Stop */}
           {actionError && (

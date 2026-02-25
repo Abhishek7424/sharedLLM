@@ -101,6 +101,23 @@ pub async fn update_device_rpc_status(pool: &SqlitePool, id: &str, rpc_status: &
     Ok(())
 }
 
+pub async fn update_device_memory_stats(
+    pool: &SqlitePool,
+    id: &str,
+    memory_total_mb: i64,
+    memory_free_mb: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE devices SET memory_total_mb = ?, memory_free_mb = ? WHERE id = ?",
+    )
+    .bind(memory_total_mb)
+    .bind(memory_free_mb)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn delete_device(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM devices WHERE id = ?")
         .bind(id)

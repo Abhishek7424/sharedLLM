@@ -216,6 +216,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/backends/models", get(api::backends::list_backend_models))
         // Cluster / Distributed inference
         .route("/api/cluster/status", get(api::cluster::cluster_status))
+        .route("/api/cluster/model-check", get(api::cluster::model_check))
         .route("/api/cluster/inference/start", post(api::cluster::start_inference))
         .route("/api/cluster/inference/stop", post(api::cluster::stop_inference))
         .route("/api/cluster/inference/status", get(api::cluster::inference_status))

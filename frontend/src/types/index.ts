@@ -264,3 +264,20 @@ export interface BackendConfig {
   model: string
   api_key?: string
 }
+
+// ─── Model memory analysis ────────────────────────────────────────────────────
+
+export type FitStatus = 'fits_locally' | 'fits_distributed' | 'partial_gpu' | 'too_large'
+
+export interface ModelCheckResult {
+  model_size_mb: number
+  estimated_layers: number
+  local_free_mb: number
+  cluster_free_mb: number
+  total_available_mb: number
+  fit_status: FitStatus
+  /** -1 means all layers on GPU, 0 means CPU only */
+  recommended_n_gpu_layers: number
+  recommended_ctx_size: number
+  warnings: string[]
+}

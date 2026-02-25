@@ -12,6 +12,32 @@ use crate::ws::WsEvent;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/// How well a model fits into the available cluster memory.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FitStatus {
+    FitsLocally,
+    FitsDistributed,
+    PartialGpu,
+    TooLarge,
+}
+
+/// Analysis of how a model will run across local + cluster memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelAnalysis {
+    pub model_size_mb: u64,
+    pub estimated_layers: u32,
+    pub local_free_mb: u64,
+    pub cluster_free_mb: u64,
+    pub total_available_mb: u64,
+    pub fit_status: FitStatus,
+    /// Recommended --n-gpu-layers value for llama-server.
+    /// -1 means "all layers on GPU", 0 means "CPU only".
+    pub recommended_n_gpu_layers: i32,
+    pub recommended_ctx_size: u32,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceSessionInfo {
     pub id: String,
@@ -66,6 +92,115 @@ impl LlamaCppManager {
             })),
             event_tx,
         }
+    }
+
+    /// Estimate llama.cpp layer count from model file size (MB).
+    /// These are approximate heuristics based on common GGUF model families.
+    fn estimate_layers(model_size_mb: u64) -> u32 {
+        match model_size_mb {
+            0..=2047   => 22, // ~1-3B
+            2048..=5119  => 32, // ~7B
+            5120..=9215  => 40, // ~13B
+            9216..=20479 => 48, // ~30-34B
+            20480..=40959 => 64, // ~40-65B
+            _            => 80, // ~70B+
+        }
+    }
+
+    /// Analyse how well a model fits into local + cluster memory.
+    ///
+    /// - `model_path`       – absolute path to the .gguf file (used for size).
+    /// - `local_free_mb`    – free memory on this machine (GPU/unified).
+    /// - `device_free_mbs`  – free memory per approved cluster device.
+    pub fn analyze_model(
+        model_path: &str,
+        local_free_mb: u64,
+        device_free_mbs: Vec<u64>,
+    ) -> anyhow::Result<ModelAnalysis> {
+        let model_size_mb = std::fs::metadata(model_path)
+            .map(|m| m.len() / (1024 * 1024))
+            .unwrap_or(0);
+
+        if model_size_mb == 0 {
+            return Err(anyhow!("Model file not found or empty: {}", model_path));
+        }
+
+        let estimated_layers = Self::estimate_layers(model_size_mb);
+        let cluster_free_mb: u64 = device_free_mbs.iter().sum();
+        let total_available_mb = local_free_mb + cluster_free_mb;
+
+        let mut warnings: Vec<String> = Vec::new();
+
+        // Leave 10% headroom when computing "usable" memory.
+        let usable_local  = (local_free_mb  as f64 * 0.90) as u64;
+        let usable_total  = (total_available_mb as f64 * 0.90) as u64;
+
+        let fit_status = if model_size_mb <= usable_local {
+            FitStatus::FitsLocally
+        } else if model_size_mb <= usable_total && cluster_free_mb > 0 {
+            FitStatus::FitsDistributed
+        } else if model_size_mb <= total_available_mb {
+            if cluster_free_mb == 0 {
+                warnings.push(
+                    "Add cluster devices to offload layers and fit this model".to_string(),
+                );
+            } else {
+                warnings.push("Model may not fit — very tight on memory".to_string());
+            }
+            FitStatus::PartialGpu
+        } else {
+            warnings.push(format!(
+                "Model needs ~{} GB but only {} GB available across cluster",
+                (model_size_mb + 511) / 1024,
+                (total_available_mb + 511) / 1024,
+            ));
+            FitStatus::TooLarge
+        };
+
+        // Recommended n_gpu_layers (-1 = all layers on GPU)
+        let recommended_n_gpu_layers: i32 = match &fit_status {
+            FitStatus::FitsLocally => -1,
+            FitStatus::FitsDistributed => {
+                // Local handles a proportional fraction of layers
+                if total_available_mb > 0 {
+                    let frac = local_free_mb as f64 / total_available_mb as f64;
+                    (frac * estimated_layers as f64).round() as i32
+                } else {
+                    0
+                }
+            }
+            FitStatus::PartialGpu => {
+                // Put as many layers as local memory can hold
+                if model_size_mb > 0 {
+                    let frac = (local_free_mb as f64 / model_size_mb as f64).min(1.0);
+                    (frac * estimated_layers as f64).round() as i32
+                } else {
+                    0
+                }
+            }
+            FitStatus::TooLarge => 0,
+        };
+
+        // Recommended ctx_size based on remaining memory after model
+        let remaining_mb = total_available_mb.saturating_sub(model_size_mb);
+        let recommended_ctx_size: u32 = match remaining_mb {
+            0..=1023   => 2048,
+            1024..=2047 => 4096,
+            2048..=4095 => 8192,
+            _           => 16384,
+        };
+
+        Ok(ModelAnalysis {
+            model_size_mb,
+            estimated_layers,
+            local_free_mb,
+            cluster_free_mb,
+            total_available_mb,
+            fit_status,
+            recommended_n_gpu_layers,
+            recommended_ctx_size,
+            warnings,
+        })
     }
 
     // ─── Binary discovery ─────────────────────────────────────────────────
@@ -203,10 +338,15 @@ impl LlamaCppManager {
     ///
     /// `rpc_addresses` is a list of "ip:port" strings for remote devices
     /// (e.g. ["192.168.1.10:8181"]). Pass an empty list to run locally only.
+    ///
+    /// `n_gpu_layers`: -1 = all layers on GPU, 0 = CPU only, N = N layers on GPU.
+    /// `ctx_size`: context window in tokens.
     pub async fn start_inference(
         &self,
         model_path: &str,
         rpc_addresses: Vec<String>,
+        n_gpu_layers: i32,
+        ctx_size: u32,
     ) -> Result<()> {
         let binary = Self::find_inference_server_bin()
             .ok_or_else(|| anyhow!(
@@ -236,10 +376,25 @@ impl LlamaCppManager {
             self.inference_port.to_string(),
             "--host".to_string(),
             "0.0.0.0".to_string(),
-            // Sensible defaults
             "--ctx-size".to_string(),
-            "4096".to_string(),
+            ctx_size.to_string(),
         ];
+
+        // Map our -1 sentinel ("all layers") to a large number llama-server understands.
+        // 0 means CPU-only (omit the flag to let llama-server default).
+        match n_gpu_layers {
+            -1 => {
+                args.push("--n-gpu-layers".to_string());
+                args.push("999".to_string()); // "all" for any model
+            }
+            n if n > 0 => {
+                args.push("--n-gpu-layers".to_string());
+                args.push(n.to_string());
+            }
+            _ => {
+                // 0 = CPU only, no flag needed (llama-server defaults to 0)
+            }
+        }
 
         if !rpc_addresses.is_empty() {
             args.push("--rpc".to_string());
@@ -247,10 +402,12 @@ impl LlamaCppManager {
         }
 
         tracing::info!(
-            "Starting llama-server: model={} rpc=[{}] port={}",
+            "Starting llama-server: model={} rpc=[{}] port={} n_gpu_layers={} ctx={}",
             model_path,
             rpc_addresses.join(","),
-            self.inference_port
+            self.inference_port,
+            n_gpu_layers,
+            ctx_size,
         );
 
         let child = Command::new(&binary)

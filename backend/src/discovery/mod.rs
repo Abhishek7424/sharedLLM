@@ -5,7 +5,6 @@ use tokio::sync::broadcast;
 use crate::ws::WsEvent;
 
 const SERVICE_TYPE: &str = "_sharedmem._tcp.local.";
-const SERVICE_NAME: &str = "SharedMemoryHost";
 const API_PORT: u16 = 8080;
 
 /// Discovered device info from mDNS
@@ -32,11 +31,19 @@ pub fn advertise() -> Result<ServiceDaemon> {
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    let instance_name = format!("{SERVICE_NAME}.{SERVICE_TYPE}");
+    // Use the short hostname (before the first '.') as the mDNS instance name so
+    // that every machine on the LAN advertises a unique name. Two devices with the
+    // same instance name trigger mDNS conflict resolution and one gets suppressed.
+    let instance = hostname
+        .split('.')
+        .next()
+        .unwrap_or("sharedllm")
+        .to_string();
+    let full_name = format!("{}.{}", instance, SERVICE_TYPE);
 
     let service_info = ServiceInfo::new(
         SERVICE_TYPE,
-        SERVICE_NAME,
+        &instance,
         &format!("{hostname}.local."),
         ip.as_str(),
         API_PORT,
@@ -44,7 +51,7 @@ pub fn advertise() -> Result<ServiceDaemon> {
     )?;
 
     mdns.register(service_info)?;
-    tracing::info!("mDNS: advertising {} at {}:{}", instance_name, ip, API_PORT);
+    tracing::info!("mDNS: advertising {} at {}:{}", full_name, ip, API_PORT);
 
     Ok(mdns)
 }

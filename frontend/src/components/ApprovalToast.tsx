@@ -1,4 +1,4 @@
-import { Bell, Check, X, Wifi } from 'lucide-react'
+import { Cpu, Check, X, Wifi } from 'lucide-react'
 
 export interface ApprovalRequest {
   device_id: string
@@ -22,26 +22,31 @@ export function ApprovalToast({ requests, onApprove, onDeny }: ApprovalToastProp
       {requests.map(req => (
         <div
           key={req.device_id}
-          className="bg-panel border border-warning/50 rounded-xl p-4 shadow-2xl
+          className="bg-panel border border-accent/40 rounded-xl p-4 shadow-2xl
                      animate-in slide-in-from-right-4 duration-300"
         >
           {/* Header */}
-          <div className="flex items-start gap-3 mb-3">
-            <div className="w-8 h-8 rounded-lg bg-warning/15 text-warning flex items-center justify-center flex-shrink-0">
-              <Bell size={16} />
+          <div className="flex items-start gap-3 mb-2">
+            <div className="w-8 h-8 rounded-lg bg-accent/15 text-accent flex items-center justify-center flex-shrink-0">
+              <Cpu size={16} />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-gray-100">Device wants to join</p>
-              <p className="text-xs text-warning truncate font-medium">{req.name}</p>
+              <p className="text-sm font-semibold text-gray-100">New device found on your network</p>
+              <p className="text-xs text-accent truncate font-medium mt-0.5">{req.name}</p>
             </div>
           </div>
+
+          {/* Sub-message */}
+          <p className="text-xs text-muted mb-3 pl-11">
+            Add to cluster to run larger LLM models across devices
+          </p>
 
           {/* Details */}
           <div className="bg-surface rounded-lg px-3 py-2 mb-3 space-y-1">
             <div className="flex items-center gap-2 text-xs text-muted">
               <Wifi size={11} />
-              <span className="text-gray-300">{req.ip}</span>
-              <span className="ml-auto text-xs">{req.discovery_method}</span>
+              <span className="text-gray-300 font-mono">{req.ip}</span>
+              <span className="ml-auto">{req.discovery_method}</span>
             </div>
           </div>
 
@@ -51,13 +56,13 @@ export function ApprovalToast({ requests, onApprove, onDeny }: ApprovalToastProp
               onClick={() => onApprove(req.device_id)}
               className="btn-success flex-1 text-xs py-1.5"
             >
-              <Check size={13} /> Allow
+              <Check size={13} /> Add to Cluster
             </button>
             <button
               onClick={() => onDeny(req.device_id)}
               className="btn-danger flex-1 text-xs py-1.5"
             >
-              <X size={13} /> Block
+              <X size={13} /> Ignore
             </button>
           </div>
         </div>
@@ -65,3 +70,4 @@ export function ApprovalToast({ requests, onApprove, onDeny }: ApprovalToastProp
     </div>
   )
 }
+
