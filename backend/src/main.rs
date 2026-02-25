@@ -224,7 +224,8 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/cluster/rpc/stop", post(api::cluster::stop_rpc_server))
         // Binary installer (streams NDJSON progress)
         .route("/api/cluster/install-binaries", post(api::install::install_binaries))
-        // OpenAI-compatible chat proxy → llama-server
+        // OpenAI-compatible API proxy → llama-server (used by Open WebUI)
+        .route("/v1/models", get(api::cluster::models_proxy))
         .route("/v1/chat/completions", post(api::cluster::chat_completions_proxy))
         // Agent install scripts
         .route("/agent/install", get(api::agent::install_script))

@@ -12,6 +12,7 @@ import { ModelsPage } from './pages/Models'
 import { SettingsPage } from './pages/Settings'
 import { InferencePage } from './pages/Inference'
 import { AgentPage } from './pages/Agent'
+import { ChatPage } from './pages/Chat'
 
 import { useWebSocket } from './hooks/useWebSocket'
 import { useDevices } from './hooks/useDevices'
@@ -151,6 +152,7 @@ export default function App() {
               <ModelsPage ollamaRunning={ollamaRunning} ollamaHost={ollamaHost} />
             } />
             <Route path="/inference" element={<InferencePage />} />
+            <Route path="/chat" element={<ChatPage />} />
             <Route path="/agent" element={<AgentPage />} />
             <Route path="/settings" element={
               <SettingsPage settings={settings} onSettingsChange={setSettings} />

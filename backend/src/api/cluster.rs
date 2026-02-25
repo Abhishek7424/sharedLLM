@@ -402,7 +402,106 @@ pub async fn chat_completions_proxy(
     proxy_request(&state.llama_cpp.client, &chat_url, api_key.as_deref(), body).await
 }
 
+// ─── GET /v1/models ──────────────────────────────────────────────────────────
+/// OpenAI-compatible model list. Proxies to the active backend when inference
+/// is running; returns an empty list otherwise so Open WebUI stays connected.
+pub async fn models_proxy(
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let backend_type = queries::get_setting(&state.pool, "backend_type")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_else(|| "llamacpp".to_string());
+
+    // Helper: build an empty OpenAI models response
+    let empty = || {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Body::from(
+                serde_json::json!({ "object": "list", "data": [] }).to_string(),
+            ))
+            .unwrap_or_else(|_| {
+                Response::builder().status(200).body(Body::empty()).unwrap()
+            })
+    };
+
+    // ── llama.cpp path ────────────────────────────────────────────────────────
+    if backend_type == "llamacpp" {
+        if !state.llama_cpp.is_inference_running().await {
+            return empty();
+        }
+        let url = format!("{}/v1/models", state.llama_cpp.inference_base_url());
+        return proxy_get(&state.llama_cpp.client, &url, None).await;
+    }
+
+    // ── External backend path ─────────────────────────────────────────────────
+    let backend_url = queries::get_setting(&state.pool, "backend_url")
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
+
+    if backend_url.is_empty() {
+        return empty();
+    }
+
+    let api_key = queries::get_setting(&state.pool, "backend_api_key")
+        .await
+        .unwrap_or(None)
+        .filter(|s| !s.is_empty());
+
+    let url = format!("{}/v1/models", backend_url.trim_end_matches('/'));
+    proxy_get(&state.llama_cpp.client, &url, api_key.as_deref()).await
+}
+
 // ─── shared proxy helper ──────────────────────────────────────────────────────
+
+async fn proxy_get(
+    client: &reqwest::Client,
+    url: &str,
+    api_key: Option<&str>,
+) -> Response {
+    let mut req = client.get(url);
+    if let Some(key) = api_key {
+        req = req.header("Authorization", format!("Bearer {}", key));
+    }
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .cloned()
+                .unwrap_or_else(|| "application/json".parse().unwrap());
+            let bytes = resp.bytes().await.unwrap_or_default();
+            Response::builder()
+                .status(status)
+                .header("content-type", ct)
+                .header("Access-Control-Allow-Origin", "*")
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap()
+                })
+        }
+        Err(e) => Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "error": format!("Backend unreachable: {}", e) })
+                    .to_string(),
+            ))
+            .unwrap_or_else(|_| {
+                Response::builder()
+                    .status(StatusCode::BAD_GATEWAY)
+                    .body(Body::empty())
+                    .unwrap()
+            }),
+    }
+}
 
 async fn proxy_request(
     client: &reqwest::Client,

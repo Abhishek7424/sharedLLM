@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Monitor, Shield, Package, Settings, Cpu, Terminal, Download } from 'lucide-react'
+import { LayoutDashboard, Monitor, Shield, Package, Settings, Cpu, Terminal, Download, MessageSquare } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const links = [
@@ -8,6 +8,7 @@ const links = [
   { to: '/permissions', icon: Shield, label: 'Permissions' },
   { to: '/models', icon: Package, label: 'Models' },
   { to: '/inference', icon: Terminal, label: 'Inference' },
+  { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/agent', icon: Download, label: 'Agent' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
