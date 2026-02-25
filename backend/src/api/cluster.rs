@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::{
     db::queries,
+    llama_cpp::validate_model_path,
     AppState,
 };
 
@@ -174,6 +175,24 @@ pub async fn start_inference(
     State(state): State<Arc<AppState>>,
     Json(req): Json<StartInferenceRequest>,
 ) -> impl IntoResponse {
+    // Validate model path before doing anything else (VULN-02)
+    if let Err(e) = validate_model_path(&req.model_path) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Limit device_ids to prevent DoS via excessive DB queries (VULN-12)
+    if req.device_ids.len() > 20 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Too many device IDs (max 20)" })),
+        )
+            .into_response();
+    }
+
     // Build the list of "ip:port" strings for the selected devices
     let mut rpc_addresses = Vec::new();
 
@@ -257,6 +276,15 @@ pub async fn model_check(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ModelCheckParams>,
 ) -> impl IntoResponse {
+    // Validate model path (VULN-02 defense in depth)
+    if let Err(e) = validate_model_path(&params.path) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     // Get local free memory across all providers
     let snapshots = crate::memory::aggregate_snapshot_async(&state.providers).await;
     let local_free_mb: u64 = snapshots.iter().map(|s| s.free_mb).sum();
@@ -267,6 +295,7 @@ pub async fn model_check(
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
+            .take(20)  // VULN-12: cap at 20 to prevent DoS
             .collect();
         let mut mbs = Vec::new();
         for id in ids {
@@ -418,7 +447,6 @@ pub async fn models_proxy(
         Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", "application/json")
-            .header("Access-Control-Allow-Origin", "*")
             .body(Body::from(
                 serde_json::json!({ "object": "list", "data": [] }).to_string(),
             ))
@@ -478,7 +506,6 @@ async fn proxy_get(
             Response::builder()
                 .status(status)
                 .header("content-type", ct)
-                .header("Access-Control-Allow-Origin", "*")
                 .body(Body::from(bytes))
                 .unwrap_or_else(|_| {
                     Response::builder()
@@ -487,11 +514,11 @@ async fn proxy_get(
                         .unwrap()
                 })
         }
-        Err(e) => Response::builder()
+        Err(_e) => Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .header("Content-Type", "application/json")
             .body(Body::from(
-                serde_json::json!({ "error": format!("Backend unreachable: {}", e) })
+                serde_json::json!({ "error": "Backend unreachable" })
                     .to_string(),
             ))
             .unwrap_or_else(|_| {
@@ -529,7 +556,6 @@ async fn proxy_request(
             Response::builder()
                 .status(status)
                 .header("content-type", ct)
-                .header("Access-Control-Allow-Origin", "*")
                 .body(Body::from_stream(stream))
                 .unwrap_or_else(|_| {
                     Response::builder()
@@ -538,11 +564,11 @@ async fn proxy_request(
                         .unwrap()
                 })
         }
-        Err(e) => Response::builder()
+        Err(_e) => Response::builder()
             .status(StatusCode::BAD_GATEWAY)
             .header("Content-Type", "application/json")
             .body(Body::from(
-                serde_json::json!({ "error": format!("Backend unreachable: {}", e) }).to_string(),
+                serde_json::json!({ "error": "Backend unreachable" }).to_string(),
             ))
             .unwrap_or_else(|_| {
                 Response::builder()

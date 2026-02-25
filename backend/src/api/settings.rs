@@ -36,12 +36,31 @@ pub async fn update_setting(
     axum::extract::Path(key): axum::extract::Path<String>,
     Json(req): Json<UpdateSettingRequest>,
 ) -> impl IntoResponse {
+    // Only allow known settings keys to be written (VULN-07)
+    const ALLOWED_KEYS: &[&str] = &[
+        "auto_start_ollama",
+        "ollama_host",
+        "mdns_enabled",
+        "trust_local_network",
+        "backend_type",
+        "backend_url",
+        "backend_model",
+        "backend_api_key",
+    ];
+    if !ALLOWED_KEYS.contains(&key.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Unknown settings key" })),
+        )
+            .into_response();
+    }
+
     match queries::set_setting(&state.pool, &key, &req.value).await {
-        Ok(()) => Json(serde_json::json!({ "ok": true, "key": key, "value": req.value }))
+        Ok(()) => Json(serde_json::json!({ "ok": true, "key": key }))
             .into_response(),
-        Err(e) => (
+        Err(_e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": "Failed to update setting" })),
         )
             .into_response(),
     }

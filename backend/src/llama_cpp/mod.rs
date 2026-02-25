@@ -76,6 +76,54 @@ pub struct LlamaCppManager {
     event_tx: broadcast::Sender<WsEvent>,
 }
 
+// ─── Model path validation ────────────────────────────────────────────────────
+
+/// Validate that a model path is safe to load:
+/// - Must be absolute (no relative paths)
+/// - Must end in `.gguf`
+/// - Must not contain path traversal (`..`)
+/// - Must not point at protected system directories
+pub fn validate_model_path(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Err(anyhow!("Model path cannot be empty"));
+    }
+
+    let p = std::path::Path::new(path);
+
+    // Reject relative paths
+    if !p.is_absolute() {
+        return Err(anyhow!("Model path must be an absolute path"));
+    }
+
+    // Reject path traversal
+    if path.contains("..") {
+        return Err(anyhow!("Model path must not contain '..'"));
+    }
+
+    // Reject non-.gguf files
+    let ext = p.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext != "gguf" {
+        return Err(anyhow!("Model path must point to a .gguf file"));
+    }
+
+    // Reject protected system directories
+    let disallowed = [
+        "/etc/", "/proc/", "/sys/", "/dev/",
+        "/boot/", "/var/run/", "/run/", "/bin/", "/sbin/",
+        "/usr/bin/", "/usr/sbin/",
+    ];
+    for prefix in &disallowed {
+        if path.starts_with(prefix) {
+            return Err(anyhow!("Model path is not in an allowed location"));
+        }
+    }
+
+    Ok(())
+}
+
 impl LlamaCppManager {
     pub fn new(event_tx: broadcast::Sender<WsEvent>) -> Self {
         LlamaCppManager {
@@ -117,12 +165,16 @@ impl LlamaCppManager {
         local_free_mb: u64,
         device_free_mbs: Vec<u64>,
     ) -> anyhow::Result<ModelAnalysis> {
+        // Validate path before any filesystem access
+        validate_model_path(model_path)?;
+
         let model_size_mb = std::fs::metadata(model_path)
             .map(|m| m.len() / (1024 * 1024))
             .unwrap_or(0);
 
         if model_size_mb == 0 {
-            return Err(anyhow!("Model file not found or empty: {}", model_path));
+            // Don't echo the path back in the error — avoid path disclosure
+            return Err(anyhow!("Model file not found or is empty"));
         }
 
         let estimated_layers = Self::estimate_layers(model_size_mb);
@@ -250,17 +302,30 @@ impl LlamaCppManager {
     pub async fn get_status(&self) -> LlamaCppStatus {
         let mut state = self.state.lock().await;
 
-        // Reap any processes that have already exited so the UI shows correct status
+        // Reap any processes that have exited and update state + broadcast events
         if let Some(child) = state.rpc_process.as_mut() {
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if let Ok(Some(exit_status)) = child.try_wait() {
+                tracing::warn!(
+                    "llama-rpc-server exited unexpectedly (code: {:?})",
+                    exit_status.code()
+                );
                 state.rpc_process = None;
-                tracing::info!("llama-rpc-server exited unexpectedly");
+                let _ = self.event_tx.send(WsEvent::RpcServerOffline);
             }
         }
         if let Some(child) = state.inference_process.as_mut() {
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if let Ok(Some(exit_status)) = child.try_wait() {
+                tracing::warn!(
+                    "llama-server exited unexpectedly (code: {:?})",
+                    exit_status.code()
+                );
                 state.inference_process = None;
-                tracing::info!("llama-server exited unexpectedly");
+                // Clear session so the UI reflects the stopped state
+                if let Some(session) = state.current_session.take() {
+                    let _ = self.event_tx.send(WsEvent::InferenceStopped {
+                        session_id: session.id,
+                    });
+                }
             }
         }
 
@@ -275,6 +340,53 @@ impl LlamaCppManager {
         }
     }
 
+    // ─── Watchdog ─────────────────────────────────────────────────────────
+
+    /// Spawn a background task that monitors the RPC and inference processes
+    /// every 5 seconds. If either dies unexpectedly, the state is cleaned up
+    /// and the appropriate WebSocket event is broadcast so the UI updates.
+    pub fn spawn_watchdog(mgr: Arc<LlamaCppManager>) {
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+
+                let mut state = mgr.state.lock().await;
+
+                // ── RPC server watchdog ────────────────────────────────────
+                if let Some(child) = state.rpc_process.as_mut() {
+                    if let Ok(Some(exit_status)) = child.try_wait() {
+                        tracing::warn!(
+                            "Watchdog: llama-rpc-server exited (code: {:?}). \
+                             Port {} may have been in use.",
+                            exit_status.code(),
+                            mgr.rpc_port,
+                        );
+                        state.rpc_process = None;
+                        let _ = mgr.event_tx.send(WsEvent::RpcServerOffline);
+                    }
+                }
+
+                // ── Inference server watchdog ──────────────────────────────
+                if let Some(child) = state.inference_process.as_mut() {
+                    if let Ok(Some(exit_status)) = child.try_wait() {
+                        tracing::warn!(
+                            "Watchdog: llama-server exited (code: {:?})",
+                            exit_status.code(),
+                        );
+                        state.inference_process = None;
+                        if let Some(session) = state.current_session.take() {
+                            let _ = mgr.event_tx.send(WsEvent::InferenceStopped {
+                                session_id: session.id,
+                            });
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // ─── Local RPC server ─────────────────────────────────────────────────
 
     /// Start the local llama-rpc-server so this host's GPU can be used by other
@@ -286,6 +398,28 @@ impl LlamaCppManager {
                  or place it in ~/.sharedmem/bin/"
             ))?;
 
+        // ── Free the port before binding ──────────────────────────────────
+        // If a previous llama-rpc-server from a crashed session is still
+        // holding the port, the new process would exit immediately. Kill it first.
+        #[cfg(unix)]
+        {
+            let port_str = self.rpc_port.to_string();
+            let _ = tokio::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "lsof -ti :{port} 2>/dev/null | xargs kill -9 2>/dev/null; true",
+                        port = port_str
+                    ),
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .await;
+            // Brief pause to let the OS release the port
+            tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+        }
+
         let mut state = self.state.lock().await;
 
         if state.rpc_process.is_some() {
@@ -294,7 +428,7 @@ impl LlamaCppManager {
         }
 
         tracing::info!("Starting llama-rpc-server on port {}", self.rpc_port);
-        let child = Command::new(binary)
+        let child = Command::new(&binary)
             .args(["--host", "0.0.0.0", "--port", &self.rpc_port.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -302,10 +436,30 @@ impl LlamaCppManager {
 
         state.rpc_process = Some(child);
 
+        // ── Verify the process is still alive 700ms after spawning ────────
+        // An immediate exit usually means the port was still in use.
+        drop(state);
+        tokio::time::sleep(tokio::time::Duration::from_millis(700)).await;
+        let mut state = self.state.lock().await;
+
+        if let Some(child) = state.rpc_process.as_mut() {
+            if let Ok(Some(code)) = child.try_wait() {
+                state.rpc_process = None;
+                return Err(anyhow!(
+                    "llama-rpc-server exited immediately after starting \
+                     (exit code: {:?}). \
+                     Check that port {} is free and the binary is working.",
+                    code.code(),
+                    self.rpc_port,
+                ));
+            }
+        }
+
         let _ = self.event_tx.send(WsEvent::RpcServerReady {
             port: self.rpc_port as i64,
         });
 
+        tracing::info!("llama-rpc-server is running on port {}", self.rpc_port);
         Ok(())
     }
 
@@ -324,6 +478,7 @@ impl LlamaCppManager {
         if let Some(child) = state.rpc_process.as_mut() {
             if matches!(child.try_wait(), Ok(Some(_))) {
                 state.rpc_process = None;
+                let _ = self.event_tx.send(WsEvent::RpcServerOffline);
                 return false;
             }
             true
@@ -348,6 +503,9 @@ impl LlamaCppManager {
         n_gpu_layers: i32,
         ctx_size: u32,
     ) -> Result<()> {
+        // Validate model path before anything else
+        validate_model_path(model_path)?;
+
         let binary = Self::find_inference_server_bin()
             .ok_or_else(|| anyhow!(
                 "llama-server not found. Install llama.cpp and add it to your PATH, \
@@ -402,8 +560,7 @@ impl LlamaCppManager {
         }
 
         tracing::info!(
-            "Starting llama-server: model={} rpc=[{}] port={} n_gpu_layers={} ctx={}",
-            model_path,
+            "Starting llama-server: rpc=[{}] port={} n_gpu_layers={} ctx={}",
             rpc_addresses.join(","),
             self.inference_port,
             n_gpu_layers,
@@ -453,8 +610,18 @@ impl LlamaCppManager {
     pub async fn is_inference_running(&self) -> bool {
         let mut state = self.state.lock().await;
         if let Some(child) = state.inference_process.as_mut() {
-            if matches!(child.try_wait(), Ok(Some(_))) {
+            if let Ok(Some(exit_status)) = child.try_wait() {
+                tracing::warn!(
+                    "llama-server exited (code: {:?})",
+                    exit_status.code()
+                );
                 state.inference_process = None;
+                // Clear session and notify the UI
+                if let Some(session) = state.current_session.take() {
+                    let _ = self.event_tx.send(WsEvent::InferenceStopped {
+                        session_id: session.id,
+                    });
+                }
                 return false;
             }
             true

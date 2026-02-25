@@ -9,6 +9,9 @@ mod ws;
 
 use anyhow::Result;
 use axum::{
+    extract::Request,
+    middleware::Next,
+    response::Response,
     routing::{delete, get, patch, post, put},
     Router,
 };
@@ -19,7 +22,7 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -82,6 +85,8 @@ async fn main() -> Result<()> {
         "llama-server: {}",
         if LlamaCppManager::find_inference_server_bin().is_some() { "found" } else { "not found" }
     );
+    // Spawn background watchdog to detect crashed child processes
+    LlamaCppManager::spawn_watchdog(llama_cpp.clone());
 
     // Auto-start Ollama
     let auto_start = db::queries::get_setting(&pool, "auto_start_ollama")
@@ -178,11 +183,29 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+// ─── Security headers middleware ──────────────────────────────────────────────
+
+async fn add_security_headers(req: Request, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert("x-content-type-options",      "nosniff".parse().unwrap());
+    headers.insert("x-frame-options",             "DENY".parse().unwrap());
+    headers.insert("referrer-policy",             "strict-origin-when-cross-origin".parse().unwrap());
+    response
+}
+
 fn build_router(state: Arc<AppState>) -> Router {
+    // Only allow requests from localhost / 127.0.0.1 origins (VULN-06)
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::predicate(|origin, _req_head| {
+            let s = origin.as_bytes();
+            s.starts_with(b"http://localhost")
+                || s.starts_with(b"http://127.0.0.1")
+                || s.starts_with(b"https://localhost")
+                || s.starts_with(b"https://127.0.0.1")
+        }))
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
 
     Router::new()
         // WebSocket
@@ -238,5 +261,6 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(add_security_headers))
         .with_state(state)
 }

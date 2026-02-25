@@ -33,6 +33,25 @@ pub async fn pull_model(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PullModelRequest>,
 ) -> impl IntoResponse {
+    // Validate model name: only safe chars, max 200 chars (VULN-21)
+    let name_ok = !req.name.is_empty()
+        && req.name.len() <= 200
+        && req.name.chars().all(|c| c.is_ascii_alphanumeric() || ":-./_".contains(c));
+    if !name_ok {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "error": "Invalid model name" }).to_string(),
+            ))
+            .unwrap_or_else(|_| {
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(Body::empty())
+                    .unwrap()
+            });
+    }
+
     match state.ollama.pull_model_stream(&req.name).await {
         Ok(response) => {
             let status = response.status();

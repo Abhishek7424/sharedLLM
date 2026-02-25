@@ -19,8 +19,30 @@ interface Model {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const STORAGE_KEY = 'sharedllm-chat-messages'
-const MODEL_KEY   = 'sharedllm-chat-model'
+const STORAGE_KEY   = 'sharedllm-chat-messages'
+const MODEL_KEY     = 'sharedllm-chat-model'
+const CHAT_TTL_MS   = 7 * 24 * 60 * 60 * 1000  // 7 days (VULN-20)
+
+// Load messages, discarding any that are older than CHAT_TTL_MS
+function loadMessages(): Message[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      // Legacy format (plain array): keep but treat as having no timestamp
+      return parsed
+    }
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.messages)) {
+      const age = Date.now() - (parsed.savedAt ?? 0)
+      if (age > CHAT_TTL_MS) return []
+      return parsed.messages
+    }
+    return []
+  } catch {
+    return []
+  }
+}
 
 const EXAMPLE_PROMPTS = [
   'Explain how distributed LLM inference works',
@@ -32,9 +54,7 @@ const EXAMPLE_PROMPTS = [
 // ─── Chat page ────────────────────────────────────────────────────────────────
 
 export function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]') } catch { return [] }
-  })
+  const [messages, setMessages] = useState<Message[]>(() => loadMessages())
   const [input, setInput]               = useState('')
   const [isStreaming, setIsStreaming]   = useState(false)
   const [models, setModels]             = useState<Model[]>([])
@@ -71,9 +91,9 @@ export function ChatPage() {
       .catch(() => {})
   }, [])
 
-  // ── Persist ────────────────────────────────────────────────────────────────
+  // ── Persist (with TTL timestamp) ──────────────────────────────────────────
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ messages, savedAt: Date.now() }))
   }, [messages])
 
   useEffect(() => {
@@ -123,7 +143,6 @@ export function ChatPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer sk-sharedllm',
         },
         body: JSON.stringify({
           model: selectedModel,
