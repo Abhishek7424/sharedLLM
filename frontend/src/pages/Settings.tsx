@@ -9,11 +9,6 @@ const SETTING_LABELS: Record<string, { label: string; description: string; type:
     description: 'Auto-approve all mDNS-discovered devices without manual approval',
     type: 'boolean',
   },
-  auto_start_ollama: {
-    label: 'Auto-start Ollama',
-    description: 'Automatically start Ollama on server launch',
-    type: 'boolean',
-  },
   mdns_enabled: {
     label: 'Enable mDNS discovery',
     description: 'Broadcast this host and scan for other SharedMem devices on the LAN',
@@ -23,11 +18,6 @@ const SETTING_LABELS: Record<string, { label: string; description: string; type:
     label: 'API port',
     description: 'Port the backend server listens on (requires restart)',
     type: 'number',
-  },
-  ollama_host: {
-    label: 'Ollama host',
-    description: 'URL where Ollama is (or will be) running',
-    type: 'string',
   },
   default_role: {
     label: 'Default role ID',

@@ -13,11 +13,7 @@ const links = [
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
-interface SidebarProps {
-  ollamaRunning: boolean
-}
-
-export function Sidebar({ ollamaRunning }: SidebarProps) {
+export function Sidebar() {
   return (
     <aside className="w-52 flex-shrink-0 bg-panel border-r border-border flex flex-col h-screen sticky top-0">
       {/* Logo */}
@@ -54,19 +50,6 @@ export function Sidebar({ ollamaRunning }: SidebarProps) {
           </NavLink>
         ))}
       </nav>
-
-      {/* Ollama status */}
-      <div className="p-4 border-t border-border">
-        <div className="flex items-center gap-2 text-xs">
-          <span className={clsx(
-            'w-2 h-2 rounded-full',
-            ollamaRunning ? 'bg-success' : 'bg-danger'
-          )} />
-          <span className={ollamaRunning ? 'text-success' : 'text-danger'}>
-            Ollama {ollamaRunning ? 'running' : 'offline'}
-          </span>
-        </div>
-      </div>
     </aside>
   )
 }

@@ -18,7 +18,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useDevices } from './hooks/useDevices'
 import { useMemory } from './hooks/useMemory'
 
-import type { WsEvent, Role, OllamaModel, Settings } from './types'
+import type { WsEvent, Role, Settings } from './types'
 import { api } from './lib/api'
 
 export default function App() {
@@ -30,23 +30,6 @@ export default function App() {
     try { const d = await api.roles(); setRoles(d.roles ?? []) } catch {}
   }, [])
   useEffect(() => { fetchRoles() }, [fetchRoles])
-
-  const [ollamaRunning, setOllamaRunning] = useState(false)
-  const [ollamaHost, setOllamaHost] = useState('http://localhost:11434')
-  const [models, setModels] = useState<OllamaModel[]>([])
-
-  useEffect(() => {
-    api.ollamaStatus().then(d => {
-      setOllamaRunning(d.running ?? false)
-      setOllamaHost(d.host ?? 'http://localhost:11434')
-    }).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    if (ollamaRunning) {
-      api.models().then(d => setModels(d.models ?? [])).catch(() => {})
-    }
-  }, [ollamaRunning])
 
   const [settings, setSettings] = useState<Settings>({})
   const [trustAll, setTrustAll] = useState(false)
@@ -91,10 +74,6 @@ export default function App() {
       case 'memory_stats':
         updateFromWs(event.snapshots)
         break
-      case 'ollama_status':
-        setOllamaRunning(event.running)
-        setOllamaHost(event.host)
-        break
       case 'rpc_server_ready':
         setRpcRunning(true)
         break
@@ -132,12 +111,11 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="flex min-h-screen bg-surface">
-        <Sidebar ollamaRunning={ollamaRunning} />
+        <Sidebar />
         <main className="flex-1 overflow-auto">
           <Routes>
             <Route path="/" element={
-              <Dashboard devices={devices} snapshots={snapshots} ollamaRunning={ollamaRunning}
-                ollamaHost={ollamaHost} models={models} />
+              <Dashboard devices={devices} snapshots={snapshots} />
             } />
             <Route path="/devices" element={
               <DevicesPage devices={devices} roles={roles} loading={devLoading}
@@ -148,9 +126,7 @@ export default function App() {
               <PermissionsPage roles={roles} onRefresh={fetchRoles}
                 trustAll={trustAll} onTrustAllChange={setTrustAll} />
             } />
-            <Route path="/models" element={
-              <ModelsPage ollamaRunning={ollamaRunning} ollamaHost={ollamaHost} />
-            } />
+            <Route path="/models" element={<ModelsPage />} />
             <Route path="/inference" element={<InferencePage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/agent" element={<AgentPage />} />

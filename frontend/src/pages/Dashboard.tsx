@@ -1,15 +1,11 @@
-import { Monitor, HardDrive, Clock, Cpu, Wifi, WifiOff } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Monitor, HardDrive, Clock, Wifi, WifiOff } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { Device, MemorySnapshot, OllamaModel } from '../types'
+import type { Device, MemorySnapshot } from '../types'
 import { MemoryBar } from '../components/MemoryBar'
 
 interface DashboardProps {
   devices: Device[]
   snapshots: MemorySnapshot[]
-  ollamaRunning: boolean
-  ollamaHost?: string
-  models: OllamaModel[]
 }
 
 function StatCard({ icon: Icon, label, value, sub, color = 'text-accent' }: {
@@ -33,7 +29,7 @@ function fmt(mb: number) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`
 }
 
-export function Dashboard({ devices, snapshots, ollamaRunning, models }: DashboardProps) {
+export function Dashboard({ devices, snapshots }: DashboardProps) {
   const approved = devices.filter(d => d.status === 'approved')
   const pending = devices.filter(d => d.status === 'pending').length
   const totalAllocated = devices.reduce((s, d) => s + d.allocated_memory_mb, 0)
@@ -50,17 +46,10 @@ export function Dashboard({ devices, snapshots, ollamaRunning, models }: Dashboa
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatCard icon={Monitor} label="Connected devices" value={approved.length} color="text-accent" />
         <StatCard icon={Clock} label="Pending approval" value={pending} color="text-warning" />
         <StatCard icon={HardDrive} label="Total allocated" value={fmt(totalAllocated)} color="text-success" />
-        <StatCard
-          icon={Cpu}
-          label="Ollama"
-          value={ollamaRunning ? 'Running' : 'Offline'}
-          sub={models.length ? `${models.length} model${models.length !== 1 ? 's' : ''}` : undefined}
-          color={ollamaRunning ? 'text-success' : 'text-danger'}
-        />
       </div>
 
       {/* Local memory pools */}
@@ -128,10 +117,13 @@ export function Dashboard({ devices, snapshots, ollamaRunning, models }: Dashboa
                         <span>{fmt(d.memory_total_mb)} total</span>
                       </div>
                     </div>
+                  ) : ready ? (
+                    <p className="text-xs text-muted">
+                      RPC ready · port {d.rpc_port} · memory stats not yet available
+                    </p>
                   ) : (
                     <p className="text-xs text-muted">
-                      Agent not running · port {d.rpc_port} ·{' '}
-                      <Link to="/agent" className="text-accent hover:underline">Install agent</Link>
+                      RPC server offline · port {d.rpc_port}
                     </p>
                   )}
                 </div>
