@@ -35,7 +35,7 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
   return (
     <div className="relative">
       {label && <p className="text-xs text-muted mb-1">{label}</p>}
-      <div className="bg-surface border border-border rounded-lg px-4 py-3 pr-10 text-sm font-mono text-gray-200 break-all">
+      <div className="bg-surface border border-border rounded-lg px-4 py-3 pr-10 text-sm font-mono text-gray-200 whitespace-pre-wrap break-words">
         {code}
         <div className="absolute top-2 right-2">
           <CopyButton text={code} />
@@ -163,14 +163,13 @@ export function AgentPage() {
         </p>
         <div className="space-y-3">
           <CodeBlock
-            code="# Install llama.cpp (macOS with Homebrew)"
-            label="Option A — Homebrew:"
+            code={`brew install llama.cpp`}
+            label="Option A — Homebrew (macOS):"
           />
-          <CodeBlock code="brew install llama.cpp" />
 
           <CodeBlock
-            code={`# Then start the RPC server\nllama-rpc-server --host 0.0.0.0 --port ${info?.rpc_port ?? 8181}`}
-            label="Option B — After installing, start the server:"
+            code={`llama-rpc-server --host 0.0.0.0 --port ${info?.rpc_port ?? 8181}`}
+            label="Then start the RPC server:"
           />
 
           <div className="mt-2">

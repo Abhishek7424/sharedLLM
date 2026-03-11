@@ -72,12 +72,28 @@ pub async fn browse(event_tx: broadcast::Sender<WsEvent>) -> Result<()> {
     tracing::info!("mDNS: browsing for {} devices (own IP: {})", SERVICE_TYPE, own_ip);
 
     tokio::task::spawn_blocking(move || {
+        // Keep `mdns` alive inside the closure: if it were dropped when
+        // `browse()` returns, the receiver would immediately disconnect and
+        // the loop below would exit on the first iteration.
+        let _mdns = mdns;
         loop {
             match receiver.recv() {
                 Ok(ServiceEvent::ServiceResolved(info)) => {
                     let addresses = info.get_addresses();
                     if let Some(addr) = addresses.iter().next() {
                         let ip = addr.to_string();
+
+                        // Skip loopback addresses (127.x.x.x, ::1)
+                        if ip.starts_with("127.") || ip == "::1" {
+                            tracing::debug!("mDNS: skipping loopback address {}", ip);
+                            continue;
+                        }
+
+                        // Skip link-local IPv6 addresses (fe80::)
+                        if ip.to_lowercase().starts_with("fe80:") {
+                            tracing::debug!("mDNS: skipping link-local address {}", ip);
+                            continue;
+                        }
 
                         // Skip ourselves — same IP means it's our own advertisement
                         if ip == own_ip {

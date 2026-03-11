@@ -42,6 +42,7 @@ pub async fn update_setting(
         "ollama_host",
         "mdns_enabled",
         "trust_local_network",
+        "default_role",
         "backend_type",
         "backend_url",
         "backend_model",

@@ -4,6 +4,7 @@ import {
   MessageSquare, Send, Plus, Square, Bot, User,
   AlertCircle, ChevronDown, Sparkles, Zap,
 } from 'lucide-react'
+import { api } from '../lib/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ export function ChatPage() {
 
   // ── Fetch models on mount ──────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/v1/models')
+    fetch(`${api.base}/v1/models`)
       .then(r => r.json())
       .then(data => {
         const list: Model[] = data.data || []
@@ -85,9 +86,9 @@ export function ChatPage() {
       })
 
     // Also check backend config for the inference URL (for display)
-    fetch('/api/backends/config')
+    fetch(`${api.base}/api/backends/config`)
       .then(r => r.json())
-      .then(d => setInferenceUrl(d.inference_url || null))
+      .then(d => setInferenceUrl(d.url || null))
       .catch(() => {})
   }, [])
 
@@ -139,7 +140,7 @@ export function ChatPage() {
     abortRef.current = controller
 
     try {
-      const resp = await fetch('/v1/chat/completions', {
+      const resp = await fetch(`${api.base}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

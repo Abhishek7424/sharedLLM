@@ -14,14 +14,9 @@ const SETTING_LABELS: Record<string, { label: string; description: string; type:
     description: 'Broadcast this host and scan for other SharedMem devices on the LAN',
     type: 'boolean',
   },
-  api_port: {
-    label: 'API port',
-    description: 'Port the backend server listens on (requires restart)',
-    type: 'number',
-  },
   default_role: {
     label: 'Default role ID',
-    description: 'Role assigned to auto-approved devices',
+    description: 'Role assigned to auto-approved devices (e.g. role-guest)',
     type: 'string',
   },
 }

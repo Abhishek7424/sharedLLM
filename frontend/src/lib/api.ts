@@ -49,6 +49,22 @@ export const api = {
 
   // Models
   models: () => fetch(`${API_BASE}/api/models`).then(checkOk).then(r => r.json()),
+  /** Scan well-known local directories for .gguf model files (≥ 50 MB). */
+  scanLocalModels: (): Promise<{ models: Array<{ path: string; name: string; size_mb: number }> }> =>
+    fetch(`${API_BASE}/api/models/scan`).then(checkOk).then(r => r.json()),
+  /** Search HuggingFace Hub for GGUF model repos. */
+  hfSearch: (q: string, limit = 20): Promise<{ models: Array<{ id: string; downloads?: number; likes?: number; tags?: string[] }> }> =>
+    fetch(`${API_BASE}/api/models/hf-search?q=${encodeURIComponent(q)}&limit=${limit}`).then(checkOk).then(r => r.json()),
+  /** List .gguf files available in a HuggingFace repo. */
+  hfListFiles: (repo: string): Promise<{ files: Array<{ filename: string; size_bytes?: number; download_url: string }> }> =>
+    fetch(`${API_BASE}/api/models/hf-files?repo=${encodeURIComponent(repo)}`).then(checkOk).then(r => r.json()),
+  /** Download a .gguf file from HuggingFace — returns raw Response for NDJSON streaming. */
+  hfDownload: (repo: string, filename: string): Promise<Response> =>
+    fetch(`${API_BASE}/api/models/hf-download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, filename }),
+    }),
   /**
    * Pull a model — returns a ReadableStream of NDJSON progress lines.
    * Caller is responsible for reading the stream and parsing each line.

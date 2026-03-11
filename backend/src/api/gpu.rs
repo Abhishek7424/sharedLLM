@@ -35,8 +35,11 @@ pub async fn get_gpu_stats(State(state): State<Arc<AppState>>) -> impl IntoRespo
         }
     }
 
+    // Compute count before moving snapshots into the json! macro; using snapshots
+    // after it is moved would be a compile error.
+    let count = snapshots.len();
     Json(serde_json::json!({
         "providers": snapshots,
-        "count": snapshots.len(),
+        "count": count,
     }))
 }

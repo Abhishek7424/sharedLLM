@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download, Check, ChevronDown, AlertTriangle } from 'lucide-react'
+import { Play, Square, Cpu, Wifi, WifiOff, Send, Loader2, RefreshCw, Download, Check, ChevronDown, AlertTriangle, FolderSearch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { api } from '../lib/api'
 import type { BackendConfig, BackendType, ClusterStatus, ChatMessage, InferenceSessionInfo, ModelCheckResult, FitStatus } from '../types'
@@ -570,6 +570,363 @@ function ChatPanel({ inferenceRunning, activeConfig }: {
   )
 }
 
+// ─── ModelPicker ──────────────────────────────────────────────────────────────
+
+interface ModelPickerProps {
+  value: string
+  onChange: (path: string) => void
+  disabled: boolean
+}
+
+interface ScannedModel {
+  path: string
+  name: string
+  size_mb: number
+}
+
+interface HfRepo {
+  id: string
+  downloads?: number
+  likes?: number
+}
+
+interface HfFile {
+  filename: string
+  size_bytes?: number
+  download_url: string
+}
+
+function fmtMb(mb: number) {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`
+}
+function fmtBytes(b: number) {
+  const mb = b / (1024 * 1024)
+  return fmtMb(mb)
+}
+
+type PickerTab = 'local' | 'huggingface'
+
+function ModelPicker({ value, onChange, disabled }: ModelPickerProps) {
+  const [tab, setTab] = useState<PickerTab>('local')
+
+  // ── Local scan state ──
+  const [scanning, setScanning] = useState(false)
+  const [localModels, setLocalModels] = useState<ScannedModel[]>([])
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [showLocalDropdown, setShowLocalDropdown] = useState(false)
+  const localDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (localDropdownRef.current && !localDropdownRef.current.contains(e.target as Node)) {
+        setShowLocalDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
+
+  async function handleScan() {
+    setScanning(true)
+    setScanError(null)
+    try {
+      const result = await api.scanLocalModels()
+      setLocalModels(result.models)
+      if (result.models.length > 0) setShowLocalDropdown(true)
+      else setScanError('No .gguf models found. Download one from HuggingFace →')
+    } catch (e: unknown) {
+      setScanError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // ── HuggingFace state ──
+  const [hfQuery, setHfQuery] = useState('')
+  const [hfSearching, setHfSearching] = useState(false)
+  const [hfRepos, setHfRepos] = useState<HfRepo[]>([])
+  const [hfSearchError, setHfSearchError] = useState<string | null>(null)
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(null)
+  const [hfFiles, setHfFiles] = useState<HfFile[]>([])
+  const [hfFilesLoading, setHfFilesLoading] = useState(false)
+  const [hfFilesError, setHfFilesError] = useState<string | null>(null)
+
+  // Download state
+  const [downloadingFile, setDownloadingFile] = useState<string | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState(0)
+  const [downloadedMb, setDownloadedMb] = useState(0)
+  const [totalMb, setTotalMb] = useState(0)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  async function handleHfSearch(e: React.FormEvent) {
+    e.preventDefault()
+    if (!hfQuery.trim()) return
+    setHfSearching(true)
+    setHfSearchError(null)
+    setHfRepos([])
+    setSelectedRepo(null)
+    setHfFiles([])
+    try {
+      const result = await api.hfSearch(hfQuery.trim())
+      setHfRepos(result.models)
+      if (result.models.length === 0) setHfSearchError('No GGUF repos found. Try a different search term.')
+    } catch (e: unknown) {
+      setHfSearchError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setHfSearching(false)
+    }
+  }
+
+  async function handleSelectRepo(repo: string) {
+    setSelectedRepo(repo)
+    setHfFiles([])
+    setHfFilesError(null)
+    setHfFilesLoading(true)
+    try {
+      const result = await api.hfListFiles(repo)
+      setHfFiles(result.files)
+      if (result.files.length === 0) setHfFilesError('No .gguf files found in this repository.')
+    } catch (e: unknown) {
+      setHfFilesError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setHfFilesLoading(false)
+    }
+  }
+
+  async function handleDownload(file: HfFile) {
+    if (!selectedRepo) return
+    setDownloadingFile(file.filename)
+    setDownloadProgress(0)
+    setDownloadedMb(0)
+    setTotalMb(0)
+    setDownloadError(null)
+    try {
+      const resp = await api.hfDownload(selectedRepo, file.filename)
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
+        setDownloadError(err.error ?? `HTTP ${resp.status}`)
+        return
+      }
+      const reader = resp.body?.getReader()
+      if (!reader) { setDownloadError('No response stream'); return }
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const msg = JSON.parse(trimmed)
+            if (msg.error) { setDownloadError(msg.error); reader.cancel().catch(() => {}); return }
+            if (msg.progress !== undefined) {
+              setDownloadProgress(msg.progress)
+              setDownloadedMb(msg.downloaded_mb ?? 0)
+              setTotalMb(msg.total_mb ?? 0)
+            }
+            if (msg.done && msg.path) {
+              onChange(msg.path)
+              setTab('local')
+            }
+          } catch { /* ignore non-JSON */ }
+        }
+      }
+    } catch (e: unknown) {
+      setDownloadError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDownloadingFile(null)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Path input + Scan */}
+      <div className="flex gap-2">
+        <input
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder="/path/to/model.gguf"
+          disabled={disabled}
+          className="flex-1 bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted disabled:opacity-50 focus:outline-none focus:border-accent font-mono"
+        />
+        <button
+          onClick={handleScan}
+          disabled={disabled || scanning}
+          title="Scan common directories for .gguf models"
+          className="flex items-center gap-1.5 px-3 py-2 text-xs rounded-lg bg-surface border border-border text-muted hover:text-gray-200 hover:border-accent/50 disabled:opacity-40 transition-colors whitespace-nowrap"
+        >
+          {scanning ? <Loader2 size={13} className="animate-spin" /> : <FolderSearch size={13} />}
+          {scanning ? 'Scanning...' : 'Scan'}
+        </button>
+      </div>
+
+      {/* Local scan results dropdown */}
+      {showLocalDropdown && localModels.length > 0 && (
+        <div ref={localDropdownRef} className="w-full bg-panel border border-border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          <p className="px-3 py-1.5 text-xs text-muted border-b border-border">
+            {localModels.length} local model{localModels.length !== 1 ? 's' : ''} found
+          </p>
+          {localModels.map(m => (
+            <button key={m.path} onClick={() => { onChange(m.path); setShowLocalDropdown(false) }}
+              className={clsx('w-full text-left px-3 py-2 text-sm hover:bg-surface transition-colors flex items-center justify-between gap-3', value === m.path ? 'text-accent' : 'text-gray-200')}
+            >
+              <div className="min-w-0">
+                <p className="truncate font-medium">{m.name}</p>
+                <p className="text-xs text-muted truncate font-mono">{m.path}</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className="text-xs text-muted">{fmtMb(m.size_mb)}</span>
+                {value === m.path && <Check size={13} className="text-accent" />}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {scanError && (
+        <p className="text-xs text-warning flex items-center gap-1.5">
+          <AlertTriangle size={11} className="flex-shrink-0" />
+          {scanError}
+          {scanError.includes('HuggingFace') && (
+            <button onClick={() => setTab('huggingface')} className="text-accent hover:underline">
+              Search HuggingFace →
+            </button>
+          )}
+        </p>
+      )}
+
+      {/* HuggingFace section toggle */}
+      <div className="border-t border-border pt-2">
+        <button
+          onClick={() => setTab(tab === 'huggingface' ? 'local' : 'huggingface')}
+          className="flex items-center gap-1.5 text-xs text-accent hover:underline"
+        >
+          <Download size={12} />
+          {tab === 'huggingface' ? 'Hide HuggingFace search' : 'Search & download from HuggingFace'}
+        </button>
+      </div>
+
+      {tab === 'huggingface' && (
+        <div className="space-y-3 border border-border rounded-lg p-3 bg-surface/50">
+          <p className="text-xs text-muted">Search for GGUF models on HuggingFace Hub. Models will be saved to <code className="font-mono text-gray-300">~/.sharedmem/models/</code></p>
+
+          {/* Search form */}
+          <form onSubmit={handleHfSearch} className="flex gap-2">
+            <input
+              value={hfQuery}
+              onChange={e => setHfQuery(e.target.value)}
+              placeholder="e.g. Llama-3.2, Mistral, Qwen2.5..."
+              className="flex-1 bg-surface border border-border rounded-lg px-3 py-1.5 text-sm text-gray-200 placeholder-muted focus:outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              disabled={hfSearching || !hfQuery.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg btn-primary disabled:opacity-40 whitespace-nowrap"
+            >
+              {hfSearching ? <Loader2 size={12} className="animate-spin" /> : null}
+              {hfSearching ? 'Searching...' : 'Search'}
+            </button>
+          </form>
+
+          {hfSearchError && (
+            <p className="text-xs text-warning flex items-center gap-1"><AlertTriangle size={11} />{hfSearchError}</p>
+          )}
+
+          {/* Repo results */}
+          {hfRepos.length > 0 && (
+            <div className="space-y-1 max-h-40 overflow-y-auto">
+              <p className="text-xs text-muted mb-1">{hfRepos.length} repos — click to see files</p>
+              {hfRepos.map(repo => (
+                <button
+                  key={repo.id}
+                  onClick={() => handleSelectRepo(repo.id)}
+                  className={clsx(
+                    'w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between gap-2',
+                    selectedRepo === repo.id
+                      ? 'bg-accent/10 border border-accent/30 text-accent'
+                      : 'bg-surface hover:bg-surface/80 border border-transparent text-gray-200'
+                  )}
+                >
+                  <span className="truncate font-mono text-xs">{repo.id}</span>
+                  <div className="flex items-center gap-2 text-xs text-muted flex-shrink-0">
+                    {repo.downloads !== undefined && <span>↓ {(repo.downloads / 1000).toFixed(0)}k</span>}
+                    {repo.likes !== undefined && <span>♥ {repo.likes}</span>}
+                    {selectedRepo === repo.id && <ChevronDown size={12} />}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Files in selected repo */}
+          {selectedRepo && (
+            <div className="border-t border-border pt-2 space-y-1">
+              <p className="text-xs text-muted font-medium">{selectedRepo} — choose a quantisation:</p>
+              {hfFilesLoading && (
+                <div className="flex items-center gap-2 text-xs text-muted py-2">
+                  <Loader2 size={12} className="animate-spin" />Loading files...
+                </div>
+              )}
+              {hfFilesError && <p className="text-xs text-warning">{hfFilesError}</p>}
+              {hfFiles.length > 0 && (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {hfFiles.map(file => {
+                    const isDownloading = downloadingFile === file.filename
+                    return (
+                      <div key={file.filename} className="flex items-center gap-2 rounded-lg border border-border p-2 bg-surface">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-mono text-gray-200 truncate">{file.filename}</p>
+                          {file.size_bytes && (
+                            <p className="text-xs text-muted">{fmtBytes(file.size_bytes)}</p>
+                          )}
+                          {isDownloading && (
+                            <div className="mt-1">
+                              <div className="h-1.5 bg-surface rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-accent rounded-full transition-all duration-300"
+                                  style={{ width: `${downloadProgress}%` }}
+                                />
+                              </div>
+                              <p className="text-xs text-muted mt-0.5">
+                                {downloadProgress}% — {fmtMb(downloadedMb)} / {fmtMb(totalMb)}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleDownload(file)}
+                          disabled={!!downloadingFile || disabled}
+                          className={clsx(
+                            'flex items-center gap-1 px-2 py-1 text-xs rounded-lg transition-colors disabled:opacity-40 flex-shrink-0',
+                            isDownloading
+                              ? 'bg-accent/20 text-accent'
+                              : 'bg-accent text-white hover:bg-accent/90'
+                          )}
+                        >
+                          {isDownloading
+                            ? <><Loader2 size={11} className="animate-spin" />Downloading</>
+                            : <><Download size={11} />Download</>}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {downloadError && (
+                <p className="text-xs text-danger flex items-center gap-1"><AlertTriangle size={11} />{downloadError}</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function InferencePage() {
@@ -704,7 +1061,12 @@ export function InferencePage() {
           try {
             const msg = JSON.parse(trimmed)
             if (msg.status) setInstallStatus(msg.status)
-            if (msg.error) { setInstallError(msg.error); return }
+            if (msg.error) {
+              setInstallError(msg.error)
+              // Cancel the stream so the server-side connection is released.
+              reader.cancel().catch(() => {})
+              return
+            }
             if (msg.done) {
               setInstallStatus('Done!')
               await refresh()
@@ -842,16 +1204,11 @@ export function InferencePage() {
           {/* Model path */}
           <div className="card">
             <h2 className="text-sm font-semibold text-gray-300 mb-3">Model (llama.cpp)</h2>
-            <input
+            <ModelPicker
               value={modelPath}
-              onChange={e => setModelPath(e.target.value)}
-              placeholder="/path/to/model.gguf"
+              onChange={setModelPath}
               disabled={inferenceRunning}
-              className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-muted disabled:opacity-50 focus:outline-none focus:border-accent font-mono"
             />
-            <p className="text-xs text-muted mt-1.5">
-              Full path to a .gguf model file on this machine.
-            </p>
           </div>
 
           {/* Device selection */}

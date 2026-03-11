@@ -47,8 +47,18 @@ export function useWebSocket(onEvent: Handler) {
   useEffect(() => {
     connect()
     return () => {
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
-      ws.current?.close()
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current)
+        reconnectTimer.current = null
+      }
+      // Null out onclose before calling close() so the handler doesn't
+      // schedule a new reconnect timer after the component has unmounted.
+      const socket = ws.current
+      ws.current = null
+      if (socket) {
+        socket.onclose = null
+        socket.close()
+      }
     }
   }, [connect])
 }

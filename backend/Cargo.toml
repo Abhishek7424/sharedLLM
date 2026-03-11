@@ -57,6 +57,13 @@ zip = "2"
 tar = "0.4"
 flate2 = "1"
 
+# URL encoding
+urlencoding = "2"
+
+# Streaming helpers
+async-stream = "0.3"
+bytes = "1"
+
 # Hostname detection
 hostname = "0.4"
 

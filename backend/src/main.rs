@@ -222,6 +222,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/gpu", get(api::gpu::get_gpu_stats))
         // Models / Ollama
         .route("/api/models", get(api::models::list_models))
+        .route("/api/models/scan", get(api::models::scan_local_models))
+        .route("/api/models/hf-search", get(api::models::hf_search))
+        .route("/api/models/hf-files", get(api::models::hf_list_files))
+        .route("/api/models/hf-download", post(api::models::hf_download))
         .route("/api/models/pull", post(api::models::pull_model))
         .route("/api/models/:name", delete(api::models::delete_model))
         .route("/api/ollama/status", get(api::models::ollama_status))
